@@ -510,3 +510,586 @@ The application is essentially a BBMP pole filtering + geographical proximity to
 Select the area → classify the old lamp → filter the poles → select a starting pole → calculate distance from that pole → display the nearest poles first → open any pole directly in Google Maps.
 
 This is now a clean Version 1 functional specification, and any changes you make during implementation can be added to this structure without changing the fundamental workflow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. What we are building
+
+The project is:
+
+BBMP Pending Poles mobile application
+
+The intended workflow is:
+
+Region
+   ↓
+Zone
+   ↓
+Ward
+   ↓
+Pole With Old Lamp
+   ├── LED
+   ├── Non-LED
+   └── Empty
+          ↓
+      Lamp Type
+          ↓
+     Starting Pole
+          ↓
+   Nearby/ordered pending poles
+          ↓
+      Pole details
+          ↓
+   Installation / image workflow
+
+The project has two main parts:
+
+D:\MIDHUN\MOBILE_APP
+│
+├── backend
+│   ├── main.py              ← active FastAPI backend
+│   ├── excel_parser.py
+│   └── test_backend.py
+│
+└── mobile
+    └── lib
+        ├── main.dart
+        ├── models
+        │   └── pole_model.dart
+        ├── screens
+        │   └── home_screen.dart
+        ├── services
+        │   ├── api_service.dart
+        │   ├── pole_service.dart
+        │   └── sample_dataset.dart
+        └── utils
+            └── haversine.dart
+
+The ZIP you provided contains the complete project, including the Git repository and generated Flutter/build files. The important application source is the structure above.
+
+2. What we have already done
+A. Backend was created
+
+The Python backend is FastAPI-based and exposes the mobile application's API.
+
+It has APIs for:
+
+GET  /api/v1/regions
+GET  /api/v1/zones
+GET  /api/v1/wards
+GET  /api/v1/pole-with-old-lamp-options
+GET  /api/v1/lamp-types
+POST /api/v1/poles/filter
+POST /api/v1/poles/calculate-distance
+
+There are also ThingsBoard/live-data endpoints.
+
+B. Region → Zone → Ward hierarchy was implemented
+
+We moved toward dependent filtering:
+
+Region selected
+    ↓
+only zones for that region
+
+Zone selected
+    ↓
+only wards for that region + zone
+
+The backend's zone endpoint filters the pending dataset by region, and the ward endpoint filters by both region and zone.
+
+This is why your screenshot is now successfully getting to:
+
+Region: EAST
+Zone: Hebbal
+Ward: HEB-W62
+
+So the hierarchy problem is substantially solved.
+
+C. ThingsBoard live integration was added
+
+The backend is no longer supposed to depend on the old static/sample dataset for production filtering.
+
+The current production filtering path calls:
+
+_get_live_pending_records()
+
+and obtains:
+
+Live Pole Survey
+        -
+Live Lamp Installation
+        =
+Live Pending Poles
+
+The backend fetches the complete Pole Survey and installed light-point datasets from ThingsBoard.
+
+The live cache has:
+
+TTL = 300 seconds
+
+so it is refreshed every 5 minutes when needed. A force-refresh endpoint also exists:
+
+POST /api/v1/schnell-iot/refresh-live-cache
+
+D. The backend was changed so live failures aren't supposed to silently fall back to sample data
+
+This is important.
+
+The current /poles/filter production path explicitly uses live ThingsBoard data:
+
+results = _get_live_pending_records().copy()
+
+rather than silently using the old sample dataset.
+
+That is the correct direction for the production application.
+
+E. Flutter asynchronous filtering was improved
+
+The Flutter screen already contains a selection-generation mechanism.
+
+For example:
+
+User changes Region
+       ↓
+request starts
+       ↓
+User changes something again
+       ↓
+older request becomes obsolete
+       ↓
+older response should not overwrite newer selection
+
+This is a good design because your app performs several asynchronous API requests.
+
+The code uses _selectionGeneration, _distanceRequestId, and _lampTypeRequestId to protect against stale responses.
+
+So we shouldn't throw this mechanism away.
+
+3. What is currently broken
+
+This is the issue shown in your screenshot:
+
+EAST
+ ↓
+Hebbal
+ ↓
+HEB-W62
+ ↓
+Empty
+ ↓
+Starting Pole
+
+"No Pending Poles Available"
+
+The important point is:
+
+The Starting Pole widget itself is not the root problem.
+
+The Starting Pole list is populated from:
+
+filtered poles returned by backend
+
+The Flutter code does essentially:
+
+API returns poles
+       ↓
+_filteredPoles = poles
+       ↓
+_startingPoles = poles.map(poleNumber)
+
+If _filteredPoles is empty, Starting Pole has nothing to show.
+
+So we need to find why the filter result becomes empty.
+
+4. The first confirmed backend problem
+
+The current live classifier is:
+
+_classify_live_pole_lamp()
+
+It parses lampProfiles.
+
+Currently the logic is essentially:
+
+No profiles
+    → Empty / -
+
+Profiles contain LED/FLED
+    → LED
+
+Everything else
+    → Non-LED
+
+The problem is that an existing profile containing something like:
+
+-
+Blank
+BLANK
+NONE
+NULL
+
+can be treated incorrectly.
+
+But your application explicitly defines Empty as having:
+
+-
+Blank
+
+The /lamp-types API already returns those values for Empty.
+
+Therefore the classification logic and filter-option logic aren't fully consistent.
+
+This can cause:
+ThingsBoard
+    ↓
+Pole actually has an empty/blank lamp
+    ↓
+backend classifies it as Non-LED
+    ↓
+user selects Empty
+    ↓
+backend finds 0
+    ↓
+Starting Pole says:
+"No Pending Poles Available"
+
+This is one of the first things we need to fix and verify.
+
+5. There is another important problem: API errors and empty results aren't clearly separated
+
+The Flutter app has several places where an API failure can ultimately leave the UI with:
+
+_startingPoles = []
+_filteredPoles = []
+
+For example, the screen clears these lists while changing selections and also clears them inside error handling.
+
+That means the user can see:
+
+No Pending Poles Available
+
+when the real situation might be:
+
+Backend request failed
+
+Those are completely different states.
+
+We need the UI to distinguish:
+
+Loading
+Loading pending poles...
+Genuine zero results
+No pending poles match these filters.
+API failure
+Unable to load pending poles.
+[Retry]
+
+This is particularly important because you said:
+
+it makes more mistakes when tried more than 2 times
+
+We should make repeated selection changes idempotent and reliable, rather than relying on the user trying again.
+
+6. What we should NOT do
+
+I don't want to continue with the previous pattern of:
+
+Something doesn't load
+    ↓
+change random code
+    ↓
+try again
+    ↓
+something else breaks
+    ↓
+add another patch
+
+That's exactly how these filter bugs become difficult to maintain.
+
+Also, your project contains many historical backend versions:
+
+main_backup.py
+main_before_hierarchy_zone_fix.py
+main_before_zone_fix.py
+main_wards_hierarchy_fast.py
+main_zones_fast.py
+main_zones_hierarchy_fast.py
+
+We should not randomly switch between them.
+
+The target should be:
+
+backend/main.py
+
+plus the current Flutter source under:
+
+mobile/lib/
+7. The next steps — in the correct order
+
+This is the part I recommend we follow strictly.
+
+STEP 1 — Establish a known-good backend baseline
+
+Before changing Flutter, test the backend independently.
+
+We need to verify:
+
+GET /
+GET /api/v1/regions
+GET /api/v1/zones?region=EAST
+GET /api/v1/wards?region=EAST&zone=Hebbal
+
+Then specifically:
+
+POST /api/v1/poles/filter
+
+with:
+
+{
+  "region": "EAST",
+  "zone": "Hebbal",
+  "ward": "HEB-W62",
+  "pole_old_lamp": "Empty",
+  "lamp_type": "-"
+}
+
+This tells us whether the problem exists before Flutter.
+
+8. STEP 2 — Verify the actual ThingsBoard records
+
+We already know ThingsBoard contains HEB-W62 records.
+
+For example, the live data includes:
+
+W62-SP0022
+W62-SP0077
+W62-SP0085
+
+and corresponding pole names such as:
+
+GBA-SNL-W62-P0581-SP0022
+GBA-SNL-W62-P1914-SP0077
+GBA-SNL-W62-P2139-SP0085
+
+So we need to inspect their actual lampProfiles.
+
+The question is:
+
+For HEB-W62,
+what does ThingsBoard actually send in lampProfiles?
+
+That will prove whether the Empty classification is the problem.
+
+9. STEP 3 — Fix the live lamp classification
+
+We'll make the classification deterministic.
+
+Conceptually:
+
+lampProfiles empty
+        ↓
+Empty / -
+
+lampProfiles contains only blank values
+        ↓
+Empty / -
+
+lampProfiles contains LED/FLED only
+        ↓
+LED
+
+anything else
+        ↓
+Non-LED
+
+Then /lamp-types and /poles/filter will use the same definition.
+
+10. STEP 4 — Make the backend refresh safely
+
+The live cache currently uses:
+
+5-minute TTL
+
+and a force refresh exists.
+
+That's good, but we need to make sure a failed ThingsBoard refresh doesn't replace a previously valid cache with an empty dataset.
+
+The safe behavior should be:
+
+Existing valid cache
+        ↓
+refresh requested
+        ↓
+ThingsBoard succeeds
+        ↓
+replace cache
+
+but:
+
+Existing valid cache
+        ↓
+refresh requested
+        ↓
+ThingsBoard fails
+        ↓
+keep previous valid cache
+        ↓
+return error status
+
+That prevents a temporary ThingsBoard failure from making the mobile app appear to have zero poles.
+
+11. STEP 5 — Fix Flutter error/state handling
+
+The Flutter app should maintain three states:
+
+LOADING
+SUCCESS
+ERROR
+
+and distinguish those from:
+
+SUCCESS + ZERO RESULTS
+
+For example:
+
+_loadingPoles = true
+_poleLoadError = null
+
+then:
+
+Successful response
+_loadingPoles = false
+_poleLoadError = null
+_filteredPoles = returned poles
+Empty response
+_loadingPoles = false
+_poleLoadError = null
+_filteredPoles = []
+Failed response
+_loadingPoles = false
+_poleLoadError = "Unable to load..."
+
+Do not clear a valid previous result merely because a newer request temporarily fails.
+
+12. STEP 6 — Make Starting Pole dependent only on the successful filter result
+
+The final chain should be:
+
+Filter request
+      ↓
+successful response?
+      │
+      ├── NO → show retry/error
+      │
+      └── YES
+           ↓
+       poles.length
+           │
+           ├── 0 → genuine "No pending poles"
+           │
+           └── >0
+                ↓
+          populate Starting Pole
+
+That makes the behavior predictable.
+
+13. STEP 7 — Test the exact sequence that is currently failing
+
+We should test this exact sequence, not just randomly click around:
+
+Clear Filters
+
+EAST
+ ↓
+Hebbal
+ ↓
+HEB-W62
+ ↓
+Empty
+ ↓
+Lamp Type "-"
+ ↓
+Starting Pole
+
+Then repeat it several times:
+
+Test 1
+Test 2
+Test 3
+Test 4
+Test 5
+
+Then test transitions:
+
+EAST → Hebbal → HEB-W62 → Empty
+        ↓
+change Ward
+        ↓
+change back to HEB-W62
+
+and:
+
+Empty → LED → Empty → Non-LED → Empty
+
+The result must remain deterministic.
+
+14. STEP 8 — Test the full application
+
+Only after the above works should we test:
+
+Starting Pole
+      ↓
+distance calculation
+      ↓
+ordered nearby poles
+      ↓
+pole selection
+      ↓
+pole details
+      ↓
+installation workflow
+      ↓
+images / submission
+
+This prevents us from debugging five layers simultaneously.
+
+Current project status
+Component	Status
+Flutter project	✅ Exists
+FastAPI backend	✅ Exists
+ThingsBoard integration	✅ Exists
+Live pending-pole calculation	✅ Implemented
+5-minute live cache	✅ Implemented
+Force live refresh endpoint	✅ Implemented
+Region dropdown	✅ Working
+Zone hierarchy	✅ Working
+Ward hierarchy	✅ Working
+Pole With Old Lamp	⚠️ Needs validation
+Lamp Type	⚠️ Needs validation
+Starting Pole	❌ Current visible failure
+Live Empty classification	⚠️ Suspected logic issue
+API error vs empty-state handling	⚠️ Needs improvement
+Repeated filter reliability	❌ Not yet proven
+Full end-to-end testing	❌ Not yet completed
+The most important conclusion
+
+We are not starting over.
+
+A substantial part of the architecture is already in place. The current problem is that the last part of the chain — live filtered pending poles → Starting Pole — isn't reliable enough.
+
+Our next move should therefore be diagnosis first, then one consolidated fix, not another series of guesses.
+
+so this is the implementation that has been done till now and the next stteps also been given in the summary way now i need u not to remove these functions like extracted data from iot let this flow be like this itself but i need the better improvement as i am developing a mobile application that to be used offline and also online keep it in my mind for each and every user they should feel this app to convenient and consistent for using the app . At firsst give me your understandings of this app development then any doubts ask me i will clarify iit then we can start the implementation then we are going to have a great time after developing correctly without any errors .So make the ui also very attractive and display the dashboard in the chrome like displaying in the mobile app . One thing that is i didn't conneced with mobile because it shows some error so i taught to finish all works by viewing in the chrome for backend then while moving to ui development we can go with conencting the mobile......
