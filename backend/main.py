@@ -31,6 +31,7 @@ from fastapi import (
 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from excel_parser import (
@@ -2739,88 +2740,63 @@ def get_pole_images(pole_number: str):
 
 
 # ============================================================
+# ============================================================
+# FLUTTER WEB FRONTEND
+# ============================================================
+# The Flutter Web build is copied to ../frontend during deployment.
+# API routes above remain available under /api/...
+# The catch-all route below serves Flutter's index.html for browser
+# routes and serves static files such as main.dart.js and assets.
+
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
+
+
+@app.get("/{full_path:path}", include_in_schema=False)
+def serve_flutter_frontend(full_path: str):
+    """
+    Serve the compiled Flutter Web application from the same Render URL.
+
+    Examples:
+      /                 -> frontend/index.html
+      /main.dart.js     -> frontend/main.dart.js
+      /assets/...       -> corresponding Flutter asset
+      /some/flutter/route -> frontend/index.html
+    """
+    # Never let this frontend fallback handle API requests.
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="API route not found")
+
+    # Avoid exposing backend files or paths outside the frontend directory.
+    requested_path = (FRONTEND_DIR / full_path).resolve()
+
+    try:
+        requested_path.relative_to(FRONTEND_DIR.resolve())
+    except ValueError:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    if requested_path.is_file():
+        return FileResponse(str(requested_path))
+
+    index_file = FRONTEND_DIR / "index.html"
+    if index_file.is_file():
+        return FileResponse(str(index_file))
+
+    return {
+        "status": "error",
+        "message": "Flutter frontend files are missing",
+        "expected_directory": str(FRONTEND_DIR),
+    }
+
+
 # START SERVER
 # ============================================================
 
 if __name__ == "__main__":
-
-    # Ask for credentials once.
-    credentials_ok = (
-        ask_schnell_iot_credentials()
-    )
-
-    if not credentials_ok:
-
-        print(
-            "Backend startup cancelled."
-        )
-
-        sys.exit(1)
-
-    # Do a startup connectivity check, but NEVER terminate the API server
-    # just because Schnell IoT is temporarily unreachable.
-    #
-    # This is important in production: the dashboard/backend must remain
-    # available while the upstream ThingsBoard service is recovering. Live
-    # endpoints will report the real upstream error instead of making the
-    # entire FastAPI server disappear from port 8000.
-    print(
-        "Connecting to Schnell IoT..."
-    )
-
-    try:
-        test_token = schnell_iot_login()
-
-        if test_token:
-            print(
-                "✓ Schnell IoT login successful."
-            )
-            print(
-                "  Live ThingsBoard data is available."
-            )
-
-    except HTTPException as exc:
-        print()
-        print(
-            "⚠ Schnell IoT is temporarily unavailable."
-        )
-        print(
-            f"Status: {exc.status_code}"
-        )
-        print(
-            f"Reason: {exc.detail}"
-        )
-        print()
-        print(
-            "⚠ Starting FastAPI anyway."
-        )
-        print(
-            "  The backend will remain available on port 8000."
-        )
-        print(
-            "  Live IoT endpoints will retry login when requested."
-        )
-        print()
-
-    print()
-    print("=" * 55)
-    print(
-        "      BBMP Pending Poles backend ready"
-    )
-    print(
-        "      FastAPI: http://0.0.0.0:8000"
-    )
-    print(
-        "      IoT: startup check may be temporarily unavailable"
-    )
-    print("=" * 55)
-    print()
-
     import uvicorn
 
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
-        reload=True
+        port=int(os.getenv("PORT", "8000")),
+        reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
     )
