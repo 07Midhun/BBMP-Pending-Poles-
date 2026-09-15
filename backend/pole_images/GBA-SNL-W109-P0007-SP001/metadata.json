@@ -1,0 +1,23 @@
+{
+  "pole_number": "GBA-SNL-W109-P0007-SP001",
+  "latitude": 12.9951342,
+  "longitude": 77.6560204,
+  "region": "EAST",
+  "zone": "CVRamanNagar",
+  "ward": "CVRN-W109",
+  "images": {
+    "1": {
+      "filename": "image_1.jpg",
+      "latitude": 12.9951342,
+      "longitude": 77.6560204,
+      "uploaded_at": "2026-09-15T16:03:02.829023+00:00",
+      "source": "technician_app",
+      "google_drive_status": "uploaded",
+      "google_drive_file_id": "1aenAa_ucN-1_xwAQ0hSBAyr00Yg1PQjT",
+      "google_drive_filename": "GBA-SNL-W109-P0007-SP001_image_1.jpg",
+      "google_drive_url": "https://drive.google.com/file/d/1aenAa_ucN-1_xwAQ0hSBAyr00Yg1PQjT/view",
+      "google_sheet_status": "updated",
+      "google_sheet_error": null
+    }
+  }
+}

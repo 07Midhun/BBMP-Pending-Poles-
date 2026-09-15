@@ -1,0 +1,18 @@
+{
+  "pole_number": "GBA-SNL-W62-P0220-SP010",
+  "latitude": 13.029156,
+  "longitude": 77.5788513,
+  "region": "EAST",
+  "zone": "Hebbal",
+  "ward": "HEB-W62",
+  "images": {
+    "1": {
+      "filename": "image_1.png",
+      "latitude": 13.029156,
+      "longitude": 77.5788513,
+      "uploaded_at": "2026-09-15T14:37:39.947405+00:00",
+      "source": "technician_app",
+      "google_drive_status": "pending"
+    }
+  }
+}

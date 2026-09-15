@@ -8,13 +8,8 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 import requests
-from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from threading import Lock, Thread
+from threading import Lock
 
 # Ensure backend directory is in sys.path for module resolution
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -76,556 +71,6 @@ app.mount(
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
-
-# ============================================================
-# GOOGLE DRIVE / GOOGLE SHEETS CONFIGURATION
-# ============================================================
-#
-# Actual project layout:
-#
-# C:\MOBILE_APP\MOBILE_APP\.env
-# C:\MOBILE_APP\MOBILE_APP\backend\main.py
-# C:\MOBILE_APP\MOBILE_APP\backend\credentials\google-service-account.json
-#
-# The project-root .env is intentionally preferred.
-# ============================================================
-
-PROJECT_DIR = BASE_DIR.parent
-ROOT_ENV_FILE = PROJECT_DIR / ".env"
-BACKEND_ENV_FILE = BASE_DIR / ".env"
-
-# Load backend/.env first as a fallback, then project-root .env last so the
-# user's root .env always wins if both files exist.
-if BACKEND_ENV_FILE.is_file():
-    load_dotenv(BACKEND_ENV_FILE, override=True)
-
-if ROOT_ENV_FILE.is_file():
-    load_dotenv(ROOT_ENV_FILE, override=True)
-
-GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
-    "GOOGLE_SERVICE_ACCOUNT_FILE",
-    "backend/credentials/google-service-account.json",
-).strip()
-
-GOOGLE_DRIVE_FOLDER_ID = os.getenv(
-    "GOOGLE_DRIVE_FOLDER_ID",
-    "",
-).strip()
-
-GOOGLE_SHEET_ID = os.getenv(
-    "GOOGLE_SHEET_ID",
-    "",
-).strip()
-
-GOOGLE_SHEET_NAME = os.getenv(
-    "GOOGLE_SHEET_NAME",
-    "Pole Data",
-).strip() or "Pole Data"
-
-_google_services = None
-_google_services_lock = Lock()
-
-
-def _resolve_google_credentials_path() -> Path:
-    """Resolve the service-account JSON for both absolute and relative paths."""
-    if not GOOGLE_SERVICE_ACCOUNT_FILE:
-        raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE is missing from the project-root .env"
-        )
-
-    configured = Path(
-        GOOGLE_SERVICE_ACCOUNT_FILE
-    ).expanduser()
-
-    if configured.is_absolute():
-        candidates = [configured]
-    else:
-        # For the user's .env, backend/credentials/... is relative to the
-        # project root. Also support credentials/... relative to backend.
-        candidates = [
-            PROJECT_DIR / configured,
-            BASE_DIR / configured,
-        ]
-
-    for candidate in candidates:
-        candidate = candidate.resolve()
-        if candidate.is_file():
-            return candidate
-
-    checked = "\n".join(f"  - {p.resolve()}" for p in candidates)
-    raise RuntimeError(
-        "Google service-account JSON file was not found. Checked:\n"
-        + checked
-    )
-
-
-def _get_google_services():
-    """Create and cache authenticated Drive + Sheets clients."""
-    global _google_services
-
-    if _google_services is not None:
-        return _google_services
-
-    with _google_services_lock:
-        if _google_services is not None:
-            return _google_services
-
-        if not GOOGLE_DRIVE_FOLDER_ID:
-            raise RuntimeError(
-                "GOOGLE_DRIVE_FOLDER_ID is missing from the project-root .env"
-            )
-
-        if not GOOGLE_SHEET_ID:
-            raise RuntimeError(
-                "GOOGLE_SHEET_ID is missing from the project-root .env"
-            )
-
-        credentials_path = _resolve_google_credentials_path()
-
-        print(
-            "[GOOGLE] Service-account file:",
-            credentials_path,
-        )
-        print(
-            "[GOOGLE] Drive folder ID:",
-            GOOGLE_DRIVE_FOLDER_ID,
-        )
-        print(
-            "[GOOGLE] Sheet ID configured:",
-            bool(GOOGLE_SHEET_ID),
-        )
-
-        credentials = service_account.Credentials.from_service_account_file(
-            str(credentials_path),
-            scopes=[
-                "https://www.googleapis.com/auth/drive",
-                "https://www.googleapis.com/auth/spreadsheets",
-            ],
-        )
-
-        drive_service = build(
-            "drive",
-            "v3",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-
-        sheets_service = build(
-            "sheets",
-            "v4",
-            credentials=credentials,
-            cache_discovery=False,
-        )
-
-        # Verify that the exact configured Drive folder is reachable.
-        # This catches the most common reason for "saved locally but not in
-        # Drive": the service account cannot access the target folder.
-        folder = drive_service.files().get(
-            fileId=GOOGLE_DRIVE_FOLDER_ID,
-            fields="id,name,mimeType,trashed",
-            supportsAllDrives=True,
-        ).execute()
-
-        if folder.get("trashed"):
-            raise RuntimeError(
-                "The configured Google Drive folder is in the trash."
-            )
-
-        if folder.get("mimeType") != "application/vnd.google-apps.folder":
-            raise RuntimeError(
-                "GOOGLE_DRIVE_FOLDER_ID does not point to a Drive folder."
-            )
-
-        print(
-            "[GOOGLE] Drive destination verified:",
-            folder.get("name"),
-            "|",
-            folder.get("id"),
-        )
-
-        _google_services = (
-            drive_service,
-            sheets_service,
-        )
-
-    return _google_services
-
-
-def _drive_upload_image(
-    contents: bytes,
-    filename: str,
-    mime_type: str,
-    pole_number: str,
-    image_slot: int,
-) -> Dict[str, str]:
-    """Upload or replace the exact pole/slot image in the configured folder."""
-    drive_service, _ = _get_google_services()
-
-    extension = Path(filename).suffix.lower()
-    safe_name = (
-        f"{_safe_pole_folder_name(pole_number)}"
-        f"_image_{image_slot}"
-        f"{extension}"
-    )
-
-    # Find an existing image for this exact pole/slot so repeated uploads do
-    # not create endless duplicates.
-    escaped_name = safe_name.replace("'", "\\'")
-    query = (
-        f"name = '{escaped_name}' "
-        f"and '{GOOGLE_DRIVE_FOLDER_ID}' in parents "
-        "and trashed = false"
-    )
-
-    existing = drive_service.files().list(
-        q=query,
-        spaces="drive",
-        corpora="user",
-        includeItemsFromAllDrives=True,
-        supportsAllDrives=True,
-        pageSize=10,
-        fields="files(id,name,parents)",
-    ).execute()
-
-    media = MediaIoBaseUpload(
-        BytesIO(contents),
-        mimetype=mime_type or "application/octet-stream",
-        resumable=False,
-    )
-
-    files_found = existing.get("files", [])
-
-    if files_found:
-        # Update the first matching file instead of creating a duplicate.
-        file_id = files_found[0]["id"]
-
-        print(
-            "[GOOGLE DRIVE] Replacing existing file:",
-            safe_name,
-            "|",
-            file_id,
-        )
-
-        updated = drive_service.files().update(
-            fileId=file_id,
-            media_body=media,
-            fields="id,name,webViewLink,webContentLink,parents",
-            supportsAllDrives=True,
-        ).execute()
-
-    else:
-        print(
-            "[GOOGLE DRIVE] Uploading:",
-            safe_name,
-            "to folder:",
-            GOOGLE_DRIVE_FOLDER_ID,
-        )
-
-        updated = drive_service.files().create(
-            body={
-                "name": safe_name,
-                "parents": [GOOGLE_DRIVE_FOLDER_ID],
-            },
-            media_body=media,
-            fields="id,name,webViewLink,webContentLink,parents",
-            supportsAllDrives=True,
-        ).execute()
-
-        file_id = updated["id"]
-
-    # Public permissions are optional. Shared Drives may prohibit this.
-    # The file itself is still successfully stored in Drive.
-    try:
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={
-                "type": "anyone",
-                "role": "reader",
-            },
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
-    except Exception as permission_error:
-        print(
-            "[GOOGLE DRIVE] Public-link permission not available:",
-            permission_error,
-        )
-
-    # Read the file back from Drive. This is an intentional verification step:
-    # the API will not report "uploaded" unless Drive confirms the file exists.
-    verified = drive_service.files().get(
-        fileId=file_id,
-        fields="id,name,parents,mimeType,size,webViewLink,webContentLink",
-        supportsAllDrives=True,
-    ).execute()
-
-    parents = verified.get("parents", [])
-    if GOOGLE_DRIVE_FOLDER_ID not in parents:
-        raise RuntimeError(
-            "Drive upload verification failed: uploaded file is not inside "
-            f"the configured folder {GOOGLE_DRIVE_FOLDER_ID}."
-        )
-
-    print(
-        "[GOOGLE DRIVE] VERIFIED:",
-        verified.get("name"),
-        "| file ID:",
-        file_id,
-        "| parent:",
-        parents,
-    )
-
-    return {
-        "file_id": file_id,
-        "filename": verified.get("name", safe_name),
-        "url": f"https://drive.google.com/file/d/{file_id}/view",
-    }
-
-def _sheet_column_letter(column_index_zero_based: int) -> str:
-    """Convert 0-based column index to Google Sheets A1 letters."""
-    number = column_index_zero_based + 1
-    letters = ""
-
-    while number:
-        number, remainder = divmod(number - 1, 26)
-        letters = chr(65 + remainder) + letters
-
-    return letters
-
-
-def _normalise_sheet_header(value: Any) -> str:
-    """Normalize spreadsheet headers for reliable matching."""
-    text = str(value or "").strip().casefold()
-    text = re.sub(r"[\s_\-]+", "", text)
-    return text
-
-
-def _normalise_sheet_pole(value: Any) -> str:
-    """Normalize pole IDs while preserving the meaningful pole suffix."""
-    text = str(value or "").strip().upper()
-    text = text.replace(" ", "")
-    return text
-
-
-def _update_sheet_image_link(
-    pole_number: str,
-    image_slot: int,
-    drive_url: str,
-) -> None:
-    """
-    Update the image URL in Google Sheets.
-
-    The spreadsheet must be shared with the service-account email as Editor.
-    This function:
-    - verifies the spreadsheet and worksheet,
-    - supports Pole Number / Pole_Number / Pole No / Pole headers,
-    - supports Image 1, Image 2, etc.,
-    - creates the Image N header when missing,
-    - supports columns beyond Z,
-    - logs the exact cell updated,
-    - verifies the written value by reading the cell back.
-    """
-    _, sheets_service = _get_google_services()
-
-    print(
-        "[GOOGLE SHEETS] Opening spreadsheet:",
-        GOOGLE_SHEET_ID,
-        "| worksheet:",
-        GOOGLE_SHEET_NAME,
-    )
-
-    # Verify spreadsheet access and worksheet name first.
-    spreadsheet = sheets_service.spreadsheets().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        fields="spreadsheetId,properties(title),sheets(properties(title,sheetId))",
-    ).execute()
-
-    worksheet_names = [
-        str(item.get("properties", {}).get("title", "")).strip()
-        for item in spreadsheet.get("sheets", [])
-    ]
-
-    if GOOGLE_SHEET_NAME not in worksheet_names:
-        raise RuntimeError(
-            f"Worksheet '{GOOGLE_SHEET_NAME}' was not found. "
-            f"Available worksheets: {worksheet_names}"
-        )
-
-    result = sheets_service.spreadsheets().values().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range=f"'{GOOGLE_SHEET_NAME}'!A:ZZ",
-        majorDimension="ROWS",
-        valueRenderOption="FORMATTED_VALUE",
-    ).execute()
-
-    rows = result.get("values", [])
-
-    if not rows:
-        raise RuntimeError(
-            "Google Sheet is empty. Add a header row and pole data first."
-        )
-
-    headers = [str(value or "").strip() for value in rows[0]]
-
-    pole_header_names = {
-        "polenumber",
-        "poleno",
-        "pole",
-        "poleid",
-        "poleidnumber",
-    }
-
-    pole_col = next(
-        (
-            index
-            for index, header in enumerate(headers)
-            if _normalise_sheet_header(header) in pole_header_names
-        ),
-        None,
-    )
-
-    if pole_col is None:
-        raise RuntimeError(
-            "Google Sheet must contain a Pole Number column. "
-            f"Current headers: {headers}"
-        )
-
-    image_header = f"Image {image_slot}"
-    image_col = next(
-        (
-            index
-            for index, header in enumerate(headers)
-            if _normalise_sheet_header(header)
-            == _normalise_sheet_header(image_header)
-        ),
-        None,
-    )
-
-    if image_col is None:
-        image_col = len(headers)
-        header_cell = (
-            f"'{GOOGLE_SHEET_NAME}'!"
-            f"{_sheet_column_letter(image_col)}1"
-        )
-
-        print(
-            "[GOOGLE SHEETS] Creating missing header:",
-            header_cell,
-            "=>",
-            image_header,
-        )
-
-        sheets_service.spreadsheets().values().update(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=header_cell,
-            valueInputOption="RAW",
-            body={"values": [[image_header]]},
-        ).execute()
-
-    wanted_pole = _normalise_sheet_pole(pole_number)
-    target_row = None
-
-    for row_index, row in enumerate(rows[1:], start=2):
-        if pole_col >= len(row):
-            continue
-
-        sheet_pole = _normalise_sheet_pole(row[pole_col])
-
-        if sheet_pole == wanted_pole:
-            target_row = row_index
-            break
-
-    if target_row is None:
-        # The sheet may contain only headers or may not yet contain this pole.
-        # Create the missing pole row automatically instead of failing after
-        # the Google Drive upload succeeds.
-        target_row = len(rows) + 1
-
-        new_row = [""] * max(len(headers), pole_col + 1)
-        new_row[pole_col] = pole_number
-
-        append_range = (
-            f"'{GOOGLE_SHEET_NAME}'!"
-            f"A{target_row}:{_sheet_column_letter(len(new_row) - 1)}{target_row}"
-        )
-
-        print(
-            "[GOOGLE SHEETS] Pole not found. Creating row:",
-            target_row,
-            "| Pole:",
-            pole_number,
-        )
-
-        sheets_service.spreadsheets().values().update(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=append_range,
-            valueInputOption="RAW",
-            body={"values": [new_row]},
-        ).execute()
-
-        # Verify the new pole row before writing the image URL.
-        row_check = sheets_service.spreadsheets().values().get(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=f"'{GOOGLE_SHEET_NAME}'!A{target_row}:ZZ{target_row}",
-            valueRenderOption="FORMATTED_VALUE",
-        ).execute()
-
-        checked_row = row_check.get("values", [[]])[0]
-        if pole_col >= len(checked_row) or (
-            _normalise_sheet_pole(checked_row[pole_col])
-            != wanted_pole
-        ):
-            raise RuntimeError(
-                f"Could not verify newly created row {target_row} "
-                f"for pole '{pole_number}'."
-            )
-
-    target_cell = (
-        f"'{GOOGLE_SHEET_NAME}'!"
-        f"{_sheet_column_letter(image_col)}{target_row}"
-    )
-
-    print(
-        "[GOOGLE SHEETS] Writing:",
-        target_cell,
-        "=>",
-        drive_url,
-    )
-
-    sheets_service.spreadsheets().values().update(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range=target_cell,
-        valueInputOption="RAW",
-        body={"values": [[drive_url]]},
-    ).execute()
-
-    # Read the cell back. Do not report Sheets success unless the value is
-    # actually present after the update.
-    verification = sheets_service.spreadsheets().values().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range=target_cell,
-        valueRenderOption="FORMULA",
-    ).execute()
-
-    written_values = verification.get("values", [])
-    written_value = (
-        written_values[0][0]
-        if written_values and written_values[0]
-        else ""
-    )
-
-    if str(written_value).strip() != str(drive_url).strip():
-        raise RuntimeError(
-            "Google Sheets write verification failed. "
-            f"Expected '{drive_url}', got '{written_value}'. "
-            f"Cell: {target_cell}"
-        )
-
-    print(
-        "[GOOGLE SHEETS] VERIFIED:",
-        target_cell,
-        "contains the Drive URL.",
-    )
 
 
 def _safe_pole_folder_name(pole_number: str) -> str:
@@ -1656,7 +1101,31 @@ def get_lamp_types(
             detail="Invalid Pole With Old Lamp classification",
         )
 
-    # Use exactly the same live pending dataset as /poles/filter.
+    # LED and Empty options are fixed application classifications.
+    # Do not trigger the expensive full live-pole refresh just to populate
+    # this dropdown. The actual pole list is still loaded by /poles/filter.
+    if pol_cls == "LED":
+        return {
+            "region": region,
+            "zone": zone,
+            "ward": ward,
+            "pole_old_lamp": pol_cls,
+            "lamp_types": ["LED", "FLED", "LED-FLED", "LED-LED"],
+            "count": 0,
+        }
+
+    if pol_cls == "Empty":
+        return {
+            "region": region,
+            "zone": zone,
+            "ward": ward,
+            "pole_old_lamp": pol_cls,
+            "lamp_types": ["-"],
+            "count": 0,
+        }
+
+    # Non-LED types are derived from the live data because they are not a
+    # fixed controlled vocabulary.
     records = _get_live_pending_records().copy()
 
     if region:
@@ -1683,7 +1152,7 @@ def get_lamp_types(
     records = [p for p in records if _matches_pole_old_lamp(p, pol_cls)]
 
     lamp_types = sorted({
-        _canonical_lamp_type(p.get("lamp_type"))
+        _compact_lamp_type(_canonical_lamp_type(p.get("lamp_type")))
         for p in records
         if _canonical_lamp_type(p.get("lamp_type"))
     })
@@ -1708,62 +1177,13 @@ def get_lamp_types(
 LIVE_PENDING_CACHE: Optional[List[Dict[str, Any]]] = None
 LIVE_PENDING_CACHE_TIME: float = 0.0
 LIVE_PENDING_CACHE_TTL_SECONDS = 300
-
-# Stale-while-refresh state. Normal filter requests return the last successful
-# dataset immediately and only one background refresh can run at a time.
-LIVE_PENDING_REFRESH_IN_PROGRESS = False
-LIVE_PENDING_REFRESH_LOCK = Lock()
 LIVE_PENDING_CACHE_LOCK = Lock()
 
 
-def _background_refresh_live_pending_cache() -> None:
-    """Refresh live pending poles without blocking normal API requests."""
-    global LIVE_PENDING_REFRESH_IN_PROGRESS
-
-    try:
-        _get_live_pending_records(force_refresh=True)
-    except Exception as exc:
-        print(f"[CACHE] Background live refresh failed: {exc}")
-    finally:
-        with LIVE_PENDING_REFRESH_LOCK:
-            LIVE_PENDING_REFRESH_IN_PROGRESS = False
-
-
-def _start_background_live_pending_refresh() -> None:
-    """Start at most one daemon refresh thread."""
-    global LIVE_PENDING_REFRESH_IN_PROGRESS
-
-    with LIVE_PENDING_REFRESH_LOCK:
-        if LIVE_PENDING_REFRESH_IN_PROGRESS:
-            return
-        LIVE_PENDING_REFRESH_IN_PROGRESS = True
-
-    Thread(
-        target=_background_refresh_live_pending_cache,
-        name="live-pending-refresh",
-        daemon=True,
-    ).start()
-
-
 def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
-    """Build a complete live pending dataset without mutating the cache.
-
-    Pole Survey and Lamp Installation are independent ThingsBoard queries,
-    so fetch them concurrently rather than waiting for one full dataset
-    before starting the other.
-    """
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        survey_future = executor.submit(
-            _fetch_all_bangalore_pole_survey_records,
-            token,
-        )
-        installed_future = executor.submit(
-            _fetch_all_bangalore_installed_records,
-            token,
-        )
-
-        survey_records = survey_future.result()
-        installed_records = installed_future.result()
+    """Build a complete live pending dataset without mutating the cache."""
+    survey_records = _fetch_all_bangalore_pole_survey_records(token)
+    installed_records = _fetch_all_bangalore_installed_records(token)
 
     installed_poles = {
         _normalize_pole_number(record.get("pole_id"))
@@ -1793,18 +1213,16 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
 
 
 def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Return live pending poles using a stale-while-refresh cache.
+    """Return live pending poles with a thread-safe, transactional 5-minute cache.
 
-    Fresh cache -> return immediately.
-    Stale cache -> return immediately and refresh in the background.
-    No cache -> perform the initial synchronous load.
-    Explicit force_refresh -> perform a synchronous refresh.
+    A refresh is built completely before replacing the current cache. If a later
+    refresh fails, an existing valid cache is retained instead of being replaced
+    by an empty/partial dataset. This prevents repeated filter attempts from
+    corrupting the data shown by the application.
     """
     global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME
 
     now = time.time()
-
-    # Fast path: fresh cache.
     if (
         not force_refresh
         and LIVE_PENDING_CACHE is not None
@@ -1812,27 +1230,14 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
     ):
         return LIVE_PENDING_CACHE
 
-    # Critical performance path: do NOT block the mobile filter request when
-    # a previous successful cache exists but has reached its TTL.
-    if not force_refresh and LIVE_PENDING_CACHE is not None:
-        stale_cache = LIVE_PENDING_CACHE
-        _start_background_live_pending_refresh()
-        return stale_cache
-
-    # Initial load or an explicit manual refresh.
+    # Only one request may refresh the expensive live dataset at a time.
     with LIVE_PENDING_CACHE_LOCK:
         now = time.time()
-
         if (
             not force_refresh
             and LIVE_PENDING_CACHE is not None
             and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
         ):
-            return LIVE_PENDING_CACHE
-
-        # A background refresh may have completed while this request waited.
-        if not force_refresh and LIVE_PENDING_CACHE is not None:
-            _start_background_live_pending_refresh()
             return LIVE_PENDING_CACHE
 
         previous_cache = LIVE_PENDING_CACHE
@@ -1843,28 +1248,19 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
             refreshed = _build_live_pending_records(token)
             refreshed_time = time.time()
 
-            # Transactional replacement: never publish a partial dataset.
+            # Replace the cache only after BOTH live datasets were fetched and
+            # the complete pending list was successfully constructed.
             LIVE_PENDING_CACHE = refreshed
             LIVE_PENDING_CACHE_TIME = refreshed_time
-            print(
-                f"[CACHE] Live pending cache refreshed: "
-                f"{len(refreshed)} poles"
-            )
             return refreshed
         except Exception:
-            # Preserve the last successful cache if an upstream refresh fails.
+            # Never destroy a previously valid cache because an upstream request
+            # temporarily failed. Initial load still raises the real error.
             if previous_cache is not None:
                 LIVE_PENDING_CACHE = previous_cache
                 LIVE_PENDING_CACHE_TIME = previous_cache_time
                 return previous_cache
             raise
-
-
-@app.on_event("startup")
-def _startup_live_cache_refresh() -> None:
-    """Warm the expensive live dataset after FastAPI starts."""
-    print("[CACHE] Starting background live pending-pole warm-up...")
-    _start_background_live_pending_refresh()
 
 
 def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
@@ -1874,7 +1270,7 @@ def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
     raw = str(value).strip()
     if not raw:
         return None
-    return _canonical_lamp_type(raw)
+    return _compact_lamp_type(_canonical_lamp_type(raw))
 
 
 def _normalize_filter_text(value: Any) -> str:
@@ -2992,6 +2388,24 @@ def _normalize_live_lamp_type(value: Any) -> str:
     return str(value or "").strip().upper().replace(" ", "")
 
 
+def _compact_lamp_type(value: Any) -> str:
+    """Collapse duplicated comma-separated lamp labels for dropdown/filter use."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    if not parts:
+        return raw
+
+    # Keep meaningful LED combinations such as LED,LED and LED,FL LED.
+    normalized = [part.upper().replace(" ", "") for part in parts]
+    if all(item == normalized[0] for item in normalized):
+        return parts[0]
+
+    return ",".join(parts)
+
+
 def _canonical_lamp_type(value: Any) -> str:
     """Return the exact lamp-type labels used by the mobile application.
 
@@ -3014,6 +2428,8 @@ def _canonical_lamp_type(value: Any) -> str:
         return "LED,LED"
     if normalized in {"FLED", "FLLED", "FL-LED", "FL_LED"}:
         return "FL LED"
+    if normalized in {"FL", "FLOODLIGHT", "FLOOD-LIGHT", "FLOOD_LIGHT"}:
+        return "FL"
     if normalized == "LED":
         return "LED"
 
@@ -3029,7 +2445,7 @@ def _canonical_lamp_type(value: Any) -> str:
                 canonical_parts.append("LED")
             else:
                 canonical_parts.append(part.strip())
-        return ",".join(canonical_parts)
+        return _compact_lamp_type(",".join(canonical_parts))
 
     return raw
 
@@ -3100,83 +2516,6 @@ def refresh_live_cache():
 # TECHNICIAN POLE IMAGES
 # ============================================================
 
-@app.get("/api/v1/google-sheets/status")
-def google_sheets_status():
-    """Verify Google Sheets access, worksheet name, and headers."""
-    try:
-        _, sheets_service = _get_google_services()
-
-        spreadsheet = sheets_service.spreadsheets().get(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            fields="spreadsheetId,properties(title),sheets(properties(title))",
-        ).execute()
-
-        worksheet_names = [
-            str(item.get("properties", {}).get("title", "")).strip()
-            for item in spreadsheet.get("sheets", [])
-        ]
-
-        if GOOGLE_SHEET_NAME not in worksheet_names:
-            raise RuntimeError(
-                f"Worksheet '{GOOGLE_SHEET_NAME}' not found. "
-                f"Available worksheets: {worksheet_names}"
-            )
-
-        result = sheets_service.spreadsheets().values().get(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=f"'{GOOGLE_SHEET_NAME}'!A:ZZ",
-            majorDimension="ROWS",
-        ).execute()
-
-        rows = result.get("values", [])
-        headers = rows[0] if rows else []
-
-        return {
-            "status": "connected",
-            "spreadsheet_id": GOOGLE_SHEET_ID,
-            "spreadsheet_title": spreadsheet.get("properties", {}).get("title"),
-            "worksheet": GOOGLE_SHEET_NAME,
-            "worksheet_exists": True,
-            "row_count": len(rows),
-            "headers": headers,
-        }
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Google Sheets configuration check failed: {exc}",
-        )
-
-
-@app.get("/api/v1/google-drive/status")
-def google_drive_status():
-    """Verify the configured service account and exact Drive destination."""
-    try:
-        drive_service, _ = _get_google_services()
-
-        folder = drive_service.files().get(
-            fileId=GOOGLE_DRIVE_FOLDER_ID,
-            fields="id,name,mimeType,trashed",
-            supportsAllDrives=True,
-        ).execute()
-
-        return {
-            "status": "connected",
-            "folder_id": folder.get("id"),
-            "folder_name": folder.get("name"),
-            "folder_mime_type": folder.get("mimeType"),
-            "sheet_id_configured": bool(GOOGLE_SHEET_ID),
-            "sheet_name": GOOGLE_SHEET_NAME,
-            "credentials_file_found": True,
-        }
-
-    except Exception as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Google Drive configuration check failed: {exc}",
-        )
-
-
 @app.post("/api/v1/poles/{pole_number}/images/{image_slot}")
 async def upload_pole_image(
     pole_number: str,
@@ -3234,22 +2573,10 @@ async def upload_pole_image(
         )
 
     content_type = (file.content_type or "").lower()
-
-    # Android may send image files as application/octet-stream.
-    # Trust the validated image extension instead of rejecting the upload
-    # only because the multipart MIME type is generic.
-    if not content_type.startswith("image/"):
-        content_type_by_extension = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-        }
-
-        content_type = content_type_by_extension.get(
-            extension,
-            "application/octet-stream",
+    if content_type and not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must be an image.",
         )
 
     # Read with a hard size limit.
@@ -3281,71 +2608,6 @@ async def upload_pole_image(
     image_path = pole_folder / f"image_{image_slot}{extension}"
     image_path.write_bytes(contents)
 
-    # ============================================================
-    # GOOGLE DRIVE UPLOAD
-    # ============================================================
-    #
-    # Local staging is retained because the existing Flutter image viewer
-    # serves local files. However, Google Drive upload is now mandatory for
-    # this endpoint to return a normal success response.
-    #
-    # This fixes the old behavior where a Drive exception was swallowed and
-    # the mobile app still displayed "Uploaded successfully".
-    # ============================================================
-
-    try:
-        drive_result = _drive_upload_image(
-            contents,
-            image_path.name,
-            content_type,
-            normalized_pole,
-            image_slot,
-        )
-    except Exception as exc:
-        print(
-            "[GOOGLE DRIVE] UPLOAD FAILED:",
-            repr(exc),
-        )
-
-        # Keep the locally staged image for recovery/debugging, but tell the
-        # mobile app that the cloud upload genuinely failed.
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "Image was saved locally, but Google Drive upload failed. "
-                f"Reason: {exc}"
-            ),
-        )
-
-    google_drive_status = "uploaded"
-    google_drive_file_id = drive_result["file_id"]
-    google_drive_filename = drive_result["filename"]
-    google_drive_url = drive_result["url"]
-
-    # ============================================================
-    # GOOGLE SHEETS UPDATE
-    # ============================================================
-
-    google_sheet_status = "updated"
-    google_sheet_error = None
-
-    try:
-        _update_sheet_image_link(
-            normalized_pole,
-            image_slot,
-            google_drive_url,
-        )
-    except Exception as exc:
-        # The Drive upload is already verified, so do not pretend the Drive
-        # upload failed. Return success with a separate Sheets warning.
-        google_sheet_status = "failed"
-        google_sheet_error = str(exc)
-
-        print(
-            "[GOOGLE SHEETS] UPDATE FAILED:",
-            repr(exc),
-        )
-
     metadata = _read_image_metadata(pole_folder)
     images = metadata.get("images")
     if not isinstance(images, dict):
@@ -3359,12 +2621,7 @@ async def upload_pole_image(
         "longitude": longitude,
         "uploaded_at": uploaded_at,
         "source": "technician_app",
-        "google_drive_status": google_drive_status,
-        "google_drive_file_id": google_drive_file_id,
-        "google_drive_filename": google_drive_filename,
-        "google_drive_url": google_drive_url,
-        "google_sheet_status": google_sheet_status,
-        "google_sheet_error": google_sheet_error,
+        "google_drive_status": "pending",
     }
 
     metadata.update(
@@ -3390,12 +2647,7 @@ async def upload_pole_image(
         "image_slot": image_slot,
         "filename": image_path.name,
         "image_url": f"/pole-images/{folder_name}/{image_path.name}",
-        "google_drive_status": google_drive_status,
-        "google_drive_file_id": google_drive_file_id,
-        "google_drive_filename": google_drive_filename,
-        "google_drive_url": google_drive_url,
-        "google_sheet_status": google_sheet_status,
-        "google_sheet_error": google_sheet_error,
+        "google_drive_status": "pending",
     }
 
 
@@ -3430,13 +2682,9 @@ def get_pole_images(pole_number: str):
             if filename:
                 images[str(slot)] = {
                     **item,
-                    # Keep local image_url for the existing Flutter viewer.
                     "image_url": (
                         f"/pole-images/{folder_name}/{filename}"
                     ),
-                    # Drive URL is also returned so the client/API can use the
-                    # cloud copy without changing the current UI contract.
-                    "google_drive_url": item.get("google_drive_url"),
                 }
             else:
                 images[str(slot)] = None
@@ -3449,7 +2697,7 @@ def get_pole_images(pole_number: str):
         "latitude": live_pole.get("latitude"),
         "longitude": live_pole.get("longitude"),
         "images": images,
-        "google_drive_status": "connected",
+        "google_drive_status": "pending",
     }
 
 
@@ -3517,13 +2765,6 @@ if __name__ == "__main__":
         )
         print()
 
-    print()
-    print("[GOOGLE] Environment:")
-    print("  Root .env:", ROOT_ENV_FILE, "| exists:", ROOT_ENV_FILE.is_file())
-    print("  Backend .env:", BACKEND_ENV_FILE, "| exists:", BACKEND_ENV_FILE.is_file())
-    print("  Drive folder configured:", bool(GOOGLE_DRIVE_FOLDER_ID))
-    print("  Sheet configured:", bool(GOOGLE_SHEET_ID))
-    print("  Service-account configured:", bool(GOOGLE_SERVICE_ACCOUNT_FILE))
     print()
     print("=" * 55)
     print(
