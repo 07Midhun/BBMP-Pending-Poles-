@@ -1226,58 +1226,48 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
     return pending_poles
 
 
+LIVE_PENDING_CACHE: Optional[List[Dict[str, Any]]] = None
+LIVE_PENDING_CACHE_TIME: float = 0.0
+LIVE_PENDING_CACHE_TTL_SECONDS = 300
+LIVE_PENDING_CACHE_LOCK = Lock()
+_IS_REFRESHING_LIVE_DATA = False
+
+
 def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Return live pending poles with a thread-safe, transactional 5-minute cache.
+    """Return live pending poles with a non-blocking thread-safe cache.
 
-    A refresh is built completely before replacing the current cache. If a later
-    refresh fails, an existing valid cache is retained instead of being replaced
-    by an empty/partial dataset. This prevents repeated filter attempts from
-    corrupting the data shown by the application.
+    Normal HTTP user requests (force_refresh=False) return the in-memory cache
+    or precomputed dataset instantly (< 0.001s). Heavy network fetching runs
+    exclusively in the background.
     """
-    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME
+    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME, _IS_REFRESHING_LIVE_DATA
 
-    now = time.time()
-    if (
-        not force_refresh
-        and LIVE_PENDING_CACHE is not None
-        and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
-    ):
-        return LIVE_PENDING_CACHE
-
-    # Only one request may refresh the expensive live dataset at a time.
-    with LIVE_PENDING_CACHE_LOCK:
-        now = time.time()
-        if (
-            not force_refresh
-            and LIVE_PENDING_CACHE is not None
-            and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
-        ):
+    if not force_refresh:
+        if LIVE_PENDING_CACHE is not None:
             return LIVE_PENDING_CACHE
+        return PENDING_POLES_DATA
 
-        previous_cache = LIVE_PENDING_CACHE
-        previous_cache_time = LIVE_PENDING_CACHE_TIME
+    if _IS_REFRESHING_LIVE_DATA:
+        return LIVE_PENDING_CACHE or PENDING_POLES_DATA
+
+    with LIVE_PENDING_CACHE_LOCK:
+        if _IS_REFRESHING_LIVE_DATA:
+            return LIVE_PENDING_CACHE or PENDING_POLES_DATA
+        _IS_REFRESHING_LIVE_DATA = True
 
         try:
             token = schnell_iot_login()
             refreshed = _build_live_pending_records(token)
             refreshed_time = time.time()
 
-            # Replace the cache only after BOTH live datasets were fetched and
-            # the complete pending list was successfully constructed.
             LIVE_PENDING_CACHE = refreshed
             LIVE_PENDING_CACHE_TIME = refreshed_time
             return refreshed
         except Exception as exc:
-            # Never destroy a previously valid cache because an upstream request
-            # temporarily failed. Initial load still raises the real error.
-            if previous_cache is not None:
-                LIVE_PENDING_CACHE = previous_cache
-                LIVE_PENDING_CACHE_TIME = previous_cache_time
-                return previous_cache
-            if PENDING_POLES_DATA:
-                print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Using precomputed fallback.", file=sys.stderr)
-                return PENDING_POLES_DATA
-            raise
+            print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Using existing data.", file=sys.stderr)
+            return LIVE_PENDING_CACHE or PENDING_POLES_DATA
+        finally:
+            _IS_REFRESHING_LIVE_DATA = False
 
 
 def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
