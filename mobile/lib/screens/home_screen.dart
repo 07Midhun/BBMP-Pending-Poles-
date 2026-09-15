@@ -173,7 +173,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (zones.isEmpty) {
         try {
           final uri = Uri.parse(
-            'http://192.168.3.149:8000/api/v1/zones'
+            'https://bbmp-pending-poles-4.onrender.com/api/v1/zones'
             '?region=${Uri.encodeQueryComponent(regionForRequest)}',
           );
           final response = await http.get(uri).timeout(
@@ -2237,3 +2237,4 @@ class AlignmentTextRight extends StatelessWidget {
     );
   }
 }
+
