@@ -874,6 +874,39 @@ def get_schnell_iot_credentials():
 
 
 # ============================================================
+# RELIABLE THINGSBOARD HTTP REQUESTS
+# ============================================================
+
+def _thingsboard_post(url: str, **kwargs):
+    """POST to ThingsBoard with bounded retries and safe timeout handling."""
+    timeout = kwargs.pop("timeout", (10, 30))
+    last_error = None
+
+    for attempt in range(3):
+        try:
+            response = requests.post(url, timeout=timeout, **kwargs)
+
+            # Retry temporary upstream failures.
+            if response.status_code in {408, 429, 500, 502, 503, 504}:
+                if attempt < 2:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+
+            return response
+
+        except (requests.Timeout, requests.ConnectionError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1.0 * (attempt + 1))
+                continue
+            raise
+
+    if last_error:
+        raise last_error
+    raise RuntimeError("ThingsBoard request failed after retries")
+
+
+# ============================================================
 # SCHNELL IOT LOGIN
 # ============================================================
 
@@ -904,7 +937,7 @@ def schnell_iot_login() -> str:
 
     try:
 
-        response = requests.post(
+        response = _thingsboard_post(
             login_url,
             json=payload,
             timeout=(8, 20)
@@ -1016,7 +1049,7 @@ def fetch_real_pole_assets(
 
     try:
 
-        response = requests.post(
+        response = _thingsboard_post(
             url,
             headers=headers,
             json=payload,
@@ -1316,7 +1349,7 @@ def get_zones(
     }
 
     try:
-        response = requests.post(
+        response = _thingsboard_post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers={
                 "X-Authorization": f"Bearer {token}",
@@ -1435,7 +1468,7 @@ def get_wards(
     }
 
     try:
-        response = requests.post(
+        response = _thingsboard_post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers={
                 "X-Authorization": f"Bearer {token}",
@@ -1511,7 +1544,7 @@ def get_wards(
     }
 
     try:
-        response = requests.post(
+        response = _thingsboard_post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers={
                 "X-Authorization": f"Bearer {token}",
@@ -1617,7 +1650,7 @@ def wards_debug(
         }
 
     def do_query(root_id: str, root_type: str = "ASSET"):
-        r = requests.post(
+        r = _thingsboard_post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers=headers,
             json=hierarchy_payload(root_id, root_type),
@@ -2367,7 +2400,7 @@ def _fetch_lightpoint_page(
         },
     }
 
-    response = requests.post(
+    response = _thingsboard_post(
         f"{TB_URL}/api/entitiesQuery/find",
         headers={
             "X-Authorization": f"Bearer {token}",
@@ -2555,7 +2588,7 @@ def _fetch_pole_survey_page(
         },
     }
 
-    response = requests.post(
+    response = _thingsboard_post(
         f"{TB_URL}/api/entitiesQuery/find",
         headers={
             "X-Authorization": f"Bearer {token}",
@@ -2742,7 +2775,7 @@ def fetch_pole_survey_bangalore(token: str) -> Dict[str, Any]:
 
     def request_page(page: int) -> Dict[str, Any]:
         try:
-            response = requests.post(
+            response = _thingsboard_post(
                 url,
                 headers=headers,
                 json=build_payload(page),
@@ -2913,7 +2946,7 @@ def _fetch_bangalore_pole_survey_page(
         ],
         "pageLink": {"pageSize": page_size, "page": page},
     }
-    response = requests.post(
+    response = _thingsboard_post(
         f"{TB_URL}/api/entitiesQuery/find",
         headers={
             "X-Authorization": f"Bearer {token}",
@@ -3491,18 +3524,16 @@ def get_pole_images(pole_number: str):
 
 if __name__ == "__main__":
 
-    # Ask for credentials once.
-    credentials_ok = (
-        ask_schnell_iot_credentials()
+    # Credentials must come from environment variables in local/Render runs.
+    # Never call input() or getpass() in a deployed server.
+    credentials_ok = bool(
+        os.getenv("SCHNELL_IOT_EMAIL", "").strip()
+        and os.getenv("SCHNELL_IOT_PASSWORD", "")
     )
 
     if not credentials_ok:
-
-        print(
-            "Backend startup cancelled."
-        )
-
-        sys.exit(1)
+        print("WARNING: Schnell IoT credentials are not configured.")
+        print("Set SCHNELL_IOT_EMAIL and SCHNELL_IOT_PASSWORD in the environment.")
 
     # Do a startup connectivity check, but NEVER terminate the API server
     # just because Schnell IoT is temporarily unreachable.
@@ -3576,5 +3607,5 @@ if __name__ == "__main__":
         "main:app",
         host="0.0.0.0",
         port=8000,
-        reload=True
+        reload=False
     )
