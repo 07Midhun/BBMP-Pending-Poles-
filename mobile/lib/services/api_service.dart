@@ -7,31 +7,50 @@ import 'package:http/http.dart' as http;
 import '../models/pole_model.dart';
 
 class ApiService {
-  // Backend is running on the same PC as Flutter Web.
-  static String activeBaseUrl = 'http://localhost:8000/api/v1';
+  // Backend running on the PC.
+  // This IP successfully responds from your PC.
+  static String activeBaseUrl =
+      'http://192.168.3.149:8000/api/v1';
 
   static List<String> get _candidateUrls {
     if (kIsWeb) {
-      final host = Uri.base.host.isNotEmpty ? Uri.base.host : 'localhost';
-
       return [
-        'http://$host:8000/api/v1',
+        // Main PC Ethernet IP.
+        'http://192.168.3.149:8000/api/v1',
+
+        // PC Wi-Fi IP, kept as a fallback.
+        'http://192.168.9.244:8000/api/v1',
+
+        // Localhost fallbacks for Flutter Web.
         'http://localhost:8000/api/v1',
         'http://127.0.0.1:8000/api/v1',
+
+        // Previous possible network address.
         'http://10.150.197.63:8000/api/v1',
       ];
     }
 
+    // Android physical phone.
     return [
-      'http://10.150.197.63:8000/api/v1',
+      // Main PC Ethernet IP.
+      'http://192.168.3.149:8000/api/v1',
+
+      // PC Wi-Fi IP.
+      'http://192.168.9.244:8000/api/v1',
+
+      // Android emulator address.
       'http://10.0.2.2:8000/api/v1',
+
+      // Localhost fallbacks.
       'http://localhost:8000/api/v1',
+      'http://127.0.0.1:8000/api/v1',
     ];
   }
 
   /// Checks whether the backend root endpoint is reachable.
   ///
-  /// The current FastAPI backend exposes GET /, not /api/v1/health.
+  /// The FastAPI backend exposes:
+  /// GET /
   static Future<bool> checkHealth() async {
     for (final url in _candidateUrls) {
       final rootUrl = url.replaceFirst('/api/v1', '');
@@ -59,10 +78,14 @@ class ApiService {
   ) {
     try {
       final decoded = json.decode(response.body);
-      if (decoded is Map<String, dynamic> && decoded['detail'] != null) {
+
+      if (decoded is Map<String, dynamic> &&
+          decoded['detail'] != null) {
         return decoded['detail'].toString();
       }
-    } catch (_) {}
+    } catch (_) {
+      // Ignore JSON parsing errors.
+    }
 
     return '$fallback (HTTP ${response.statusCode})';
   }
@@ -76,9 +99,13 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        return List<String>.from(data['regions'] ?? const []);
+        return List<String>.from(
+          data['regions'] ?? const [],
+        );
       }
-    } catch (_) {}
+    } catch (_) {
+      // Return an empty list if the request fails.
+    }
 
     return [];
   }
@@ -96,9 +123,13 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        return List<String>.from(data['zones'] ?? const []);
+        return List<String>.from(
+          data['zones'] ?? const [],
+        );
       }
-    } catch (_) {}
+    } catch (_) {
+      // Return an empty list if the request fails.
+    }
 
     return [];
   }
@@ -123,31 +154,72 @@ class ApiService {
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        return List<String>.from(data['wards'] ?? const []);
+        return List<String>.from(
+          data['wards'] ?? const [],
+        );
       }
-    } catch (_) {}
+    } catch (_) {
+      // Return an empty list if the request fails.
+    }
 
     return [];
   }
 
-  static Future<List<String>> fetchLampTypes(
-    String poleOldLamp,
-  ) async {
-    final url =
-        '$activeBaseUrl/lamp-types?pole_old_lamp=${Uri.encodeComponent(poleOldLamp)}';
+  /// Fetches lamp types available for the selected hierarchy.
+  ///
+  /// Backend filters:
+  /// - region
+  /// - zone
+  /// - ward
+  /// - pole_old_lamp
+  static Future<List<String>> fetchLampTypes({
+    String? region,
+    String? zone,
+    String? ward,
+    required String poleOldLamp,
+  }) async {
+    final queryParameters = <String, String>{
+      'pole_old_lamp': poleOldLamp,
+    };
+
+    if (region != null && region.trim().isNotEmpty) {
+      queryParameters['region'] = region.trim();
+    }
+
+    if (zone != null && zone.trim().isNotEmpty) {
+      queryParameters['zone'] = zone.trim();
+    }
+
+    if (ward != null && ward.trim().isNotEmpty) {
+      queryParameters['ward'] = ward.trim();
+    }
+
+    final uri = Uri.parse(
+      '$activeBaseUrl/lamp-types',
+    ).replace(
+      queryParameters: queryParameters,
+    );
 
     final response = await http
-        .get(Uri.parse(url))
+        .get(uri)
         .timeout(const Duration(seconds: 30));
 
     if (response.statusCode != 200) {
-      throw Exception(_serverError(response, 'Unable to load lamp types'));
+      throw Exception(
+        _serverError(
+          response,
+          'Unable to load lamp types',
+        ),
+      );
     }
 
     final data = json.decode(response.body);
 
-    if (data is! Map<String, dynamic> || data['lamp_types'] is! List) {
-      throw Exception('Invalid lamp type response from backend');
+    if (data is! Map<String, dynamic> ||
+        data['lamp_types'] is! List) {
+      throw Exception(
+        'Invalid lamp type response from backend',
+      );
     }
 
     return List<String>.from(data['lamp_types']);
@@ -177,18 +249,30 @@ class ApiService {
         .timeout(const Duration(seconds: 120));
 
     if (response.statusCode != 200) {
-      throw Exception(_serverError(response, 'Unable to filter pending poles'));
+      throw Exception(
+        _serverError(
+          response,
+          'Unable to filter pending poles',
+        ),
+      );
     }
 
     final data = json.decode(response.body);
 
-    if (data is! Map<String, dynamic> || data['poles'] is! List) {
-      throw Exception('Invalid pending-pole response from backend');
+    if (data is! Map<String, dynamic> ||
+        data['poles'] is! List) {
+      throw Exception(
+        'Invalid pending-pole response from backend',
+      );
     }
 
     return (data['poles'] as List)
         .whereType<Map>()
-        .map((item) => Pole.fromJson(Map<String, dynamic>.from(item)))
+        .map(
+          (item) => Pole.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
         .toList();
   }
 
@@ -202,7 +286,9 @@ class ApiService {
   }) async {
     final response = await http
         .post(
-          Uri.parse('$activeBaseUrl/poles/calculate-distance'),
+          Uri.parse(
+            '$activeBaseUrl/poles/calculate-distance',
+          ),
           headers: {
             'Content-Type': 'application/json',
           },
@@ -219,32 +305,42 @@ class ApiService {
 
     if (response.statusCode != 200) {
       throw Exception(
-        _serverError(response, 'Unable to calculate pole distances'),
+        _serverError(
+          response,
+          'Unable to calculate pole distances',
+        ),
       );
     }
 
     final data = json.decode(response.body);
 
-    if (data is! Map<String, dynamic> || data['poles'] is! List) {
-      throw Exception('Invalid distance response from backend');
+    if (data is! Map<String, dynamic> ||
+        data['poles'] is! List) {
+      throw Exception(
+        'Invalid distance response from backend',
+      );
     }
 
     return (data['poles'] as List)
         .whereType<Map>()
-        .map((item) => Pole.fromJson(Map<String, dynamic>.from(item)))
+        .map(
+          (item) => Pole.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
         .toList();
   }
 
-
   /// Looks up one pole directly in Schnell IoT / ThingsBoard.
   ///
-  /// Returns the raw IoT pole information when the pole is found.
+  /// Returns the raw IoT pole information when found.
   /// Returns null when the pole is not found or the request fails.
   static Future<Map<String, dynamic>?> fetchSchnellIoTPole(
     String poleNumber,
   ) async {
     try {
-      final encodedPoleNumber = Uri.encodeComponent(poleNumber);
+      final encodedPoleNumber =
+          Uri.encodeComponent(poleNumber);
 
       final response = await http
           .get(
@@ -260,19 +356,23 @@ class ApiService {
         if (data is Map<String, dynamic> &&
             data['matched'] == true &&
             data['pole'] is Map) {
-          return Map<String, dynamic>.from(data['pole'] as Map);
+          return Map<String, dynamic>.from(
+            data['pole'] as Map,
+          );
         }
       }
-    } catch (_) {}
+    } catch (_) {
+      // Return null if the request fails.
+    }
 
     return null;
   }
 
-  /// Looks up multiple poles in Schnell IoT / ThingsBoard in one request.
+  /// Looks up multiple poles in Schnell IoT / ThingsBoard.
   ///
-  /// The returned map is keyed by pole number. Each value contains the
-  /// backend's live IoT result for that pole.
-  static Future<Map<String, Map<String, dynamic>>> fetchSchnellIoTPoles(
+  /// The returned map is keyed by pole number.
+  static Future<Map<String, Map<String, dynamic>>>
+      fetchSchnellIoTPoles(
     List<String> poleNumbers,
   ) async {
     if (poleNumbers.isEmpty) {
@@ -282,7 +382,9 @@ class ApiService {
     try {
       final response = await http
           .post(
-            Uri.parse('$activeBaseUrl/schnell-iot/poles'),
+            Uri.parse(
+              '$activeBaseUrl/schnell-iot/poles',
+            ),
             headers: {
               'Content-Type': 'application/json',
             },
@@ -298,7 +400,8 @@ class ApiService {
 
       final data = json.decode(response.body);
 
-      if (data is! Map<String, dynamic> || data['poles'] is! List) {
+      if (data is! Map<String, dynamic> ||
+          data['poles'] is! List) {
         return {};
       }
 
@@ -310,11 +413,14 @@ class ApiService {
         }
 
         final poleNumber = item['pole_number'];
-        if (poleNumber is! String || poleNumber.isEmpty) {
+
+        if (poleNumber is! String ||
+            poleNumber.isEmpty) {
           continue;
         }
 
-        results[poleNumber] = Map<String, dynamic>.from(item);
+        results[poleNumber] =
+            Map<String, dynamic>.from(item);
       }
 
       return results;
@@ -322,5 +428,4 @@ class ApiService {
       return {};
     }
   }
-
 }

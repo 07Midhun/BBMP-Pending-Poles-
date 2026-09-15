@@ -9,6 +9,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from threading import Lock
 
 # Ensure backend directory is in sys.path for module resolution
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1172,21 +1173,11 @@ def get_lamp_types(
 LIVE_PENDING_CACHE: Optional[List[Dict[str, Any]]] = None
 LIVE_PENDING_CACHE_TIME: float = 0.0
 LIVE_PENDING_CACHE_TTL_SECONDS = 300
+LIVE_PENDING_CACHE_LOCK = Lock()
 
 
-def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Return live pending poles, refreshing the cache every 5 minutes."""
-    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME
-
-    now = time.time()
-    if (
-        not force_refresh
-        and LIVE_PENDING_CACHE is not None
-        and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
-    ):
-        return LIVE_PENDING_CACHE
-
-    token = schnell_iot_login()
+def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
+    """Build a complete live pending dataset without mutating the cache."""
     survey_records = _fetch_all_bangalore_pole_survey_records(token)
     installed_records = _fetch_all_bangalore_installed_records(token)
 
@@ -1206,14 +1197,66 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
             pole.get("lamp_profiles")
         )
         record = dict(pole)
+        record["pole_number"] = pole_number
         record["region"] = _normalize_region(record.get("region"))
+        record["zone"] = str(record.get("zone") or "").strip()
+        record["ward"] = str(record.get("ward") or "").strip()
         record["pole_old_lamp"] = pole_old_lamp
         record["lamp_type"] = lamp_type
         pending_poles.append(record)
 
-    LIVE_PENDING_CACHE = pending_poles
-    LIVE_PENDING_CACHE_TIME = now
     return pending_poles
+
+
+def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
+    """Return live pending poles with a thread-safe, transactional 5-minute cache.
+
+    A refresh is built completely before replacing the current cache. If a later
+    refresh fails, an existing valid cache is retained instead of being replaced
+    by an empty/partial dataset. This prevents repeated filter attempts from
+    corrupting the data shown by the application.
+    """
+    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME
+
+    now = time.time()
+    if (
+        not force_refresh
+        and LIVE_PENDING_CACHE is not None
+        and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
+    ):
+        return LIVE_PENDING_CACHE
+
+    # Only one request may refresh the expensive live dataset at a time.
+    with LIVE_PENDING_CACHE_LOCK:
+        now = time.time()
+        if (
+            not force_refresh
+            and LIVE_PENDING_CACHE is not None
+            and (now - LIVE_PENDING_CACHE_TIME) < LIVE_PENDING_CACHE_TTL_SECONDS
+        ):
+            return LIVE_PENDING_CACHE
+
+        previous_cache = LIVE_PENDING_CACHE
+        previous_cache_time = LIVE_PENDING_CACHE_TIME
+
+        try:
+            token = schnell_iot_login()
+            refreshed = _build_live_pending_records(token)
+            refreshed_time = time.time()
+
+            # Replace the cache only after BOTH live datasets were fetched and
+            # the complete pending list was successfully constructed.
+            LIVE_PENDING_CACHE = refreshed
+            LIVE_PENDING_CACHE_TIME = refreshed_time
+            return refreshed
+        except Exception:
+            # Never destroy a previously valid cache because an upstream request
+            # temporarily failed. Initial load still raises the real error.
+            if previous_cache is not None:
+                LIVE_PENDING_CACHE = previous_cache
+                LIVE_PENDING_CACHE_TIME = previous_cache_time
+                return previous_cache
+            raise
 
 
 def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
@@ -1239,26 +1282,18 @@ def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
     return aliases.get(normalized, raw)
 
 
+def _normalize_filter_text(value: Any) -> str:
+    """Normalize hierarchy/filter text without changing its displayed value."""
+    return str(value or "").strip().casefold()
+
+
 def _matches_pole_old_lamp(
     pole: Dict[str, Any],
     selected: Optional[str],
 ) -> bool:
     if not selected:
         return True
-
-    wanted = selected.strip().casefold()
-    actual = str(pole.get("pole_old_lamp") or "").strip().casefold()
-
-    if wanted == "led":
-        return actual == "led"
-
-    if wanted == "empty":
-        return actual == "empty"
-
-    if wanted == "non-led":
-        return actual == "non-led"
-
-    return actual == wanted
+    return _normalize_filter_text(pole.get("pole_old_lamp")) == _normalize_filter_text(selected)
 
 
 def _matches_lamp_type(
@@ -1269,11 +1304,8 @@ def _matches_lamp_type(
         return True
 
     wanted = _normalize_filter_lamp_type(selected)
-    actual = _normalize_filter_lamp_type(
-        str(pole.get("lamp_type") or "").strip()
-    )
-
-    return actual == wanted
+    actual = _normalize_filter_lamp_type(pole.get("lamp_type"))
+    return _normalize_filter_text(actual) == _normalize_filter_text(wanted)
 
 
 @app.post("/api/v1/poles/filter")
@@ -1286,27 +1318,24 @@ def filter_poles(
     results = _get_live_pending_records().copy()
 
     if req.region:
-
+        wanted_region = _normalize_filter_text(_normalize_region(req.region))
         results = [
-            p
-            for p in results
-            if p.get("region") == req.region
+            p for p in results
+            if _normalize_filter_text(p.get("region")) == wanted_region
         ]
 
     if req.zone:
-
+        wanted_zone = _normalize_filter_text(req.zone)
         results = [
-            p
-            for p in results
-            if p.get("zone") == req.zone
+            p for p in results
+            if _normalize_filter_text(p.get("zone")) == wanted_zone
         ]
 
     if req.ward:
-
+        wanted_ward = _normalize_filter_text(req.ward)
         results = [
-            p
-            for p in results
-            if p.get("ward") == req.ward
+            p for p in results
+            if _normalize_filter_text(p.get("ward")) == wanted_ward
         ]
 
     if req.pole_old_lamp:
@@ -1328,6 +1357,9 @@ def filter_poles(
                 req.lamp_type,
             )
         ]
+
+    # Keep Starting Pole ordering deterministic between repeated identical requests.
+    results.sort(key=lambda p: _normalize_pole_number(p.get("pole_number")))
 
     return {
         "count": len(results),
@@ -2336,46 +2368,64 @@ def _normalize_region(value: Any) -> str:
 
 
 def _parse_lamp_profiles(value: Any) -> List[Dict[str, Any]]:
-    """Parse Pole Survey lampProfiles, which is stored as JSON text."""
-    if value is None or value == "":
+    """Parse Pole Survey lampProfiles from the different TB shapes we may receive."""
+    if value is None:
         return []
 
     parsed = value
     if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return []
         try:
-            parsed = json.loads(value)
+            parsed = json.loads(stripped)
         except (TypeError, ValueError):
             return []
+
+    # Normally lampProfiles is a JSON list. Accept one dict as a defensive
+    # fallback because ThingsBoard attributes can occasionally be stored that way.
+    if isinstance(parsed, dict):
+        parsed = [parsed]
 
     if not isinstance(parsed, list):
         return []
 
-    profiles: List[Dict[str, Any]] = []
-    for item in parsed:
-        if isinstance(item, dict):
-            profiles.append(item)
-    return profiles
+    return [item for item in parsed if isinstance(item, dict)]
+
+
+_EMPTY_LAMP_MARKERS = {
+    "", "-", "BLANK", "NONE", "NULL", "NAN", "NA", "N/A", "EMPTY"
+}
+
+
+def _normalize_live_lamp_type(value: Any) -> str:
+    """Normalize a live lamp type for classification/filter matching."""
+    return str(value or "").strip().upper().replace(" ", "")
 
 
 def _classify_live_pole_lamp(lamp_profiles: Any) -> tuple[str, str]:
-    """Return (Pole With Old Lamp, Lamp Type) using live Pole Survey data."""
-    profiles = _parse_lamp_profiles(lamp_profiles)
+    """Return the stable application classification for live Pole Survey data.
 
-    if not profiles:
-        return "Empty", "-"
+    Empty markers are ignored. Thus [], [{"type":"-"}], [{"type":"Blank"}]
+    and similar records all become Empty / -. LED and FLED are one LED group;
+    any remaining real lamp type is Non-LED.
+    """
+    profiles = _parse_lamp_profiles(lamp_profiles)
 
     lamp_types: List[str] = []
     for profile in profiles:
-        lamp_type = str(profile.get("type") or "").strip()
-        if lamp_type and lamp_type not in lamp_types:
-            lamp_types.append(lamp_type)
+        raw_type = str(profile.get("type") or "").strip()
+        normalized = _normalize_live_lamp_type(raw_type)
+        if normalized in _EMPTY_LAMP_MARKERS:
+            continue
+        if raw_type and raw_type not in lamp_types:
+            lamp_types.append(raw_type)
 
     if not lamp_types:
         return "Empty", "-"
 
-    normalized_types = {lamp_type.upper() for lamp_type in lamp_types}
+    normalized_types = {_normalize_live_lamp_type(t) for t in lamp_types}
 
-    # FLED belongs to LED. Preserve each distinct profile in stable order.
     if normalized_types.issubset({"LED", "FLED"}):
         return "LED", ",".join(lamp_types)
 

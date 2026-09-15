@@ -8,11 +8,6 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 import requests
-from dotenv import load_dotenv
-from google.oauth2 import service_account
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 
@@ -76,113 +71,6 @@ app.mount(
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
 MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
-
-# Google Drive / Sheets configuration. This is used only for technician images.
-load_dotenv(BASE_DIR / ".env")
-GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
-    "GOOGLE_SERVICE_ACCOUNT_FILE", "credentials/google-service-account.json"
-)
-GOOGLE_DRIVE_FOLDER_ID = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
-GOOGLE_SHEET_ID = os.getenv("GOOGLE_SHEET_ID", "").strip()
-GOOGLE_SHEET_NAME = os.getenv("GOOGLE_SHEET_NAME", "Sheet1").strip() or "Sheet1"
-
-_google_services = None
-_google_services_lock = Lock()
-
-def _get_google_services():
-    global _google_services
-    if _google_services is not None:
-        return _google_services
-    with _google_services_lock:
-        if _google_services is None:
-            credentials_path = Path(GOOGLE_SERVICE_ACCOUNT_FILE)
-            if not credentials_path.is_absolute():
-                credentials_path = BASE_DIR / credentials_path
-            if not credentials_path.exists():
-                raise RuntimeError(f"Google service-account file not found: {credentials_path}")
-            if not GOOGLE_DRIVE_FOLDER_ID or not GOOGLE_SHEET_ID:
-                raise RuntimeError("GOOGLE_DRIVE_FOLDER_ID and GOOGLE_SHEET_ID must be set in .env")
-            credentials = service_account.Credentials.from_service_account_file(
-                str(credentials_path),
-                scopes=[
-                    "https://www.googleapis.com/auth/drive",
-                    "https://www.googleapis.com/auth/spreadsheets",
-                ],
-            )
-            _google_services = (
-                build("drive", "v3", credentials=credentials, cache_discovery=False),
-                build("sheets", "v4", credentials=credentials, cache_discovery=False),
-            )
-    return _google_services
-
-def _drive_upload_image(contents: bytes, filename: str, mime_type: str, pole_number: str, image_slot: int) -> str:
-    drive_service, _ = _get_google_services()
-    safe_name = f"{_safe_pole_folder_name(pole_number)}_image_{image_slot}{Path(filename).suffix.lower()}"
-    media = MediaIoBaseUpload(BytesIO(contents), mimetype=mime_type or "application/octet-stream", resumable=False)
-    created = drive_service.files().create(
-        body={"name": safe_name, "parents": [GOOGLE_DRIVE_FOLDER_ID]},
-        media_body=media,
-        fields="id,webViewLink,webContentLink",
-        supportsAllDrives=True,
-    ).execute()
-    file_id = created["id"]
-    try:
-        drive_service.permissions().create(
-            fileId=file_id,
-            body={"type": "anyone", "role": "reader"},
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
-    except Exception:
-        # Some Shared Drives restrict public-link permissions. The upload
-        # itself is still valid, so keep the Drive file URL.
-        pass
-    return f"https://drive.google.com/file/d/{file_id}/view"
-
-def _update_sheet_image_link(pole_number: str, image_slot: int, drive_url: str) -> None:
-    _, sheets_service = _get_google_services()
-    result = sheets_service.spreadsheets().values().get(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range=f"'{GOOGLE_SHEET_NAME}'!A:ZZ",
-    ).execute()
-    rows = result.get("values", [])
-    if not rows:
-        raise RuntimeError("Google Sheet is empty. Add a header row and pole data first.")
-    headers = [str(v).strip() for v in rows[0]]
-    pole_col = next((i for i, h in enumerate(headers) if h.casefold() in {"pole number", "pole_number", "poleno", "pole no", "pole"}), None)
-    if pole_col is None:
-        raise RuntimeError("Google Sheet must contain a 'Pole Number' column.")
-    image_header = f"Image {image_slot}"
-    image_col = next((i for i, h in enumerate(headers) if h.casefold() == image_header.casefold()), None)
-    if image_col is None:
-        image_col = len(headers)
-        sheets_service.spreadsheets().values().update(
-            spreadsheetId=GOOGLE_SHEET_ID,
-            range=f"'{GOOGLE_SHEET_NAME}'!{chr(65 + image_col)}1",
-            valueInputOption="RAW",
-            body={"values": [[image_header]]},
-        ).execute()
-    target_row = None
-    wanted = _normalize_pole_number(pole_number).casefold()
-    for row_index, row in enumerate(rows[1:], start=2):
-        if pole_col < len(row) and _normalize_pole_number(row[pole_col]).casefold() == wanted:
-            target_row = row_index
-            break
-    if target_row is None:
-        raise RuntimeError(f"Pole {pole_number} was not found in Google Sheet.")
-    def col_letter(n):
-        out = ""
-        n += 1
-        while n:
-            n, rem = divmod(n - 1, 26)
-            out = chr(65 + rem) + out
-        return out
-    sheets_service.spreadsheets().values().update(
-        spreadsheetId=GOOGLE_SHEET_ID,
-        range=f"'{GOOGLE_SHEET_NAME}'!{col_letter(image_col)}{target_row}",
-        valueInputOption="RAW",
-        body={"values": [[drive_url]]},
-    ).execute()
 
 
 def _safe_pole_folder_name(pole_number: str) -> str:
@@ -2641,22 +2529,10 @@ async def upload_pole_image(
         )
 
     content_type = (file.content_type or "").lower()
-
-    # Android may send image files as application/octet-stream.
-    # Trust the validated image extension instead of rejecting the upload
-    # only because the multipart MIME type is generic.
-    if not content_type.startswith("image/"):
-        content_type_by_extension = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-        }
-
-        content_type = content_type_by_extension.get(
-            extension,
-            "application/octet-stream",
+    if content_type and not content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must be an image.",
         )
 
     # Read with a hard size limit.
@@ -2688,26 +2564,6 @@ async def upload_pole_image(
     image_path = pole_folder / f"image_{image_slot}{extension}"
     image_path.write_bytes(contents)
 
-    # Upload the same image to Google Drive and update only the matching
-    # Image 1 / Image 2 / Image 3 cell in Google Sheets. Existing workflow
-    # and local staging files are preserved.
-    try:
-        drive_url = _drive_upload_image(
-            contents,
-            image_path.name,
-            content_type ,
-            normalized_pole,
-            image_slot,
-        )
-        _update_sheet_image_link(normalized_pole, image_slot, drive_url)
-        google_drive_status = "uploaded"
-    except Exception as exc:
-        google_drive_status = "failed"
-        raise HTTPException(
-            status_code=502,
-            detail=f"Image saved locally, but Google Drive/Sheets update failed: {exc}",
-        )
-
     metadata = _read_image_metadata(pole_folder)
     images = metadata.get("images")
     if not isinstance(images, dict):
@@ -2721,7 +2577,7 @@ async def upload_pole_image(
         "longitude": longitude,
         "uploaded_at": uploaded_at,
         "source": "technician_app",
-        "google_drive_status": google_drive_status,
+        "google_drive_status": "pending",
     }
 
     metadata.update(
@@ -2747,7 +2603,7 @@ async def upload_pole_image(
         "image_slot": image_slot,
         "filename": image_path.name,
         "image_url": f"/pole-images/{folder_name}/{image_path.name}",
-        "google_drive_status": google_drive_status,
+        "google_drive_status": "pending",
     }
 
 
@@ -2797,7 +2653,7 @@ def get_pole_images(pole_number: str):
         "latitude": live_pole.get("latitude"),
         "longitude": live_pole.get("longitude"),
         "images": images,
-        "google_drive_status": "connected",
+        "google_drive_status": "pending",
     }
 
 
