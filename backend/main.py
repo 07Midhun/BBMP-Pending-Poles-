@@ -663,28 +663,25 @@ def simplify_real_pole(entity: Dict[str, Any]) -> Dict[str, Any]:
 # ROOT
 # ============================================================
 
-@app.get("/")
+@app.get("/", include_in_schema=False)
 def read_root():
+    """Serve the Flutter Web application at the main Render URL."""
+    frontend_index = BASE_DIR.parent / "frontend" / "index.html"
 
-    email, password = (
-        get_schnell_iot_credentials()
-    )
+    if frontend_index.is_file():
+        return FileResponse(str(frontend_index))
 
+    # Keep a useful diagnostic response if the Flutter build was not deployed.
+    email, password = get_schnell_iot_credentials()
     return {
         "status": "online",
         "app": "BBMP Pending Poles Backend API",
-        "master_poles_count": len(
-            MASTER_POLES_DATA
-        ),
-        "installed_records_count": len(
-            INSTALLED_REPORT_DATA
-        ),
-        "pending_poles_count": len(
-            PENDING_POLES_DATA
-        ),
-        "iot_credentials_configured": bool(
-            email and password
-        )
+        "message": "Flutter frontend files are missing",
+        "expected_file": str(frontend_index),
+        "master_poles_count": len(MASTER_POLES_DATA),
+        "installed_records_count": len(INSTALLED_REPORT_DATA),
+        "pending_poles_count": len(PENDING_POLES_DATA),
+        "iot_credentials_configured": bool(email and password),
     }
 
 
