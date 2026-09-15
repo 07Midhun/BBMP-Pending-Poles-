@@ -48,3 +48,11 @@ ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json
 
 # Generated web file
 web/manifest.jsonbackend/credentials/ 
+
+# Environment files
+.env
+backend/.env
+
+# Google credentials
+backend/credentials/
+*.json
