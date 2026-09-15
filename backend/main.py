@@ -710,8 +710,6 @@ def get_regions():
 # ZONES
 # ============================================================
 
-@app.get("/api/v1/zones")
-def get_zones(
 _ZONES_CACHE: Dict[str, List[str]] = {}
 _WARDS_CACHE: Dict[str, List[str]] = {}
 
