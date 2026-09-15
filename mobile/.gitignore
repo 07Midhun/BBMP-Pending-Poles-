@@ -44,8 +44,8 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 .env
-*.json
 credentials/
+*.json
 backend/pole_images/
 __pycache__/
 *.pyc
