@@ -1,107 +1,50 @@
-# ==========================================================
-# Flutter / Dart
-# ==========================================================
-
-.dart_tool/
-.flutter-plugins
-.flutter-plugins-dependencies
-.pub/
-.pub-cache/
-.packages
-build/
-coverage/
-
-**/doc/api/
-**/ios/Flutter/.last_build_id
-
-app.*.symbols
-app.*.map.json
-
-# Android build outputs
-android/app/debug/
-android/app/profile/
-android/app/release/
-
-# ==========================================================
-# IDE / Editor files
-# ==========================================================
-
-.idea/
-*.iml
-*.ipr
-*.iws
-
-.vscode/
-.history
-.atom/
-
-# ==========================================================
-# Operating system files
-# ==========================================================
-
-.DS_Store
-Thumbs.db
-
-# ==========================================================
 # Python
-# ==========================================================
-
 __pycache__/
 *.py[cod]
 *.pyo
-
 .venv/
 venv/
 env/
 
-.pytest_cache/
-.mypy_cache/
-
-# ==========================================================
-# Logs and temporary files
-# ==========================================================
-
-*.log
-*.swp
-*.tmp
-*.temp
-
-# ==========================================================
-# Environment files
-# ==========================================================
-
+# Environment and secrets
 .env
 .env.*
 !.env.example
 
-# ==========================================================
-# Credentials and secret files
-# ==========================================================
+# Flutter/Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+build/
+coverage/
 
-credentials/
-*.pem
-*.key
-*.p12
-*.pfx
+# Android
+android/.gradle/
+android/local.properties
+android/key.properties
 
-# Specific Google service-account credential file
-bbmp-pole-images-dfb8de1e3f03.json
+# IDE
+.idea/
+.vscode/
+*.iml
 
-# Common Google service-account filename
-google-service-account.json
+# macOS/Windows
+.DS_Store
+Thumbs.db
 
-# ==========================================================
-# Local project files
-# ==========================================================
+# Generated Flutter web files
+frontend/
+# Flutter generated files
+.dart_tool/
+build/
+android/.kotlin/
+*.log
 
-migrate_working_dir/
-.build/
-.buildlog/
-.svn/
-.swiftpm/.env
-**/.env
-*.env
-backend/credentials/
-**/credentials/
-__pycache__/
-*.pyc
+# Generated iOS assets
+ios/Runner/Assets.xcassets/AppIcon.appiconset/Contents.json
+ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json
+
+# Generated web file
+web/manifest.json
