@@ -5,17 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
 
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
-
-class _ImageFormat {
-  final String extension;
-  final String mimeType;
-
-  const _ImageFormat(this.extension, this.mimeType);
-}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -806,57 +798,6 @@ class _HomeScreenState extends State<HomeScreen> {
   String _imageKey(String poleNumber, int slot) =>
       '$poleNumber::$slot';
 
-  _ImageFormat? _detectImageFormat(List<int> bytes, String? reportedMimeType) {
-    bool startsWith(List<int> signature) {
-      if (bytes.length < signature.length) return false;
-      for (int i = 0; i < signature.length; i++) {
-        if (bytes[i] != signature[i]) return false;
-      }
-      return true;
-    }
-
-    // JPEG: FF D8 FF
-    if (startsWith(const [0xFF, 0xD8, 0xFF])) {
-      return const _ImageFormat('jpg', 'image/jpeg');
-    }
-
-    // PNG: 89 50 4E 47 0D 0A 1A 0A
-    if (startsWith(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
-      return const _ImageFormat('png', 'image/png');
-    }
-
-    // GIF: GIF87a or GIF89a
-    if (startsWith(const [0x47, 0x49, 0x46, 0x38])) {
-      return const _ImageFormat('gif', 'image/gif');
-    }
-
-    // WEBP: RIFF....WEBP
-    if (bytes.length >= 12 &&
-        startsWith(const [0x52, 0x49, 0x46, 0x46]) &&
-        bytes[8] == 0x57 &&
-        bytes[9] == 0x45 &&
-        bytes[10] == 0x42 &&
-        bytes[11] == 0x50) {
-      return const _ImageFormat('webp', 'image/webp');
-    }
-
-    // Fallback to the picker MIME type only when it is an accepted image type.
-    final mime = reportedMimeType?.toLowerCase().trim();
-    switch (mime) {
-      case 'image/jpeg':
-      case 'image/jpg':
-        return const _ImageFormat('jpg', 'image/jpeg');
-      case 'image/png':
-        return const _ImageFormat('png', 'image/png');
-      case 'image/gif':
-        return const _ImageFormat('gif', 'image/gif');
-      case 'image/webp':
-        return const _ImageFormat('webp', 'image/webp');
-      default:
-        return null;
-    }
-  }
-
   Future<void> _uploadPoleImage({
     required Pole pole,
     required int slot,
@@ -873,21 +814,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final bytes = await image.readAsBytes();
-      if (bytes.isEmpty) {
-        throw Exception('Selected image is empty. Please choose another image.');
-      }
-
-      // Determine the real image format from the file bytes first. This is
-      // more reliable than image.name, especially for Android gallery files.
-      final imageFormat = _detectImageFormat(bytes, image.mimeType);
-      if (imageFormat == null) {
-        throw Exception(
-          'Uploaded file must be an image. Please choose a JPG, PNG, WEBP, or GIF file.',
-        );
-      }
-
-      final extension = imageFormat.extension;
-      final mimeType = imageFormat.mimeType;
+      final extension = image.name.contains('.')
+          ? image.name.split('.').last.toLowerCase()
+          : 'jpg';
 
       final baseUrl = ApiService.activeBaseUrl;
       final uri = Uri.parse(
@@ -901,7 +830,6 @@ class _HomeScreenState extends State<HomeScreen> {
           'file',
           bytes,
           filename: 'image_$slot.$extension',
-          contentType: MediaType.parse(mimeType),
         ),
       );
 
