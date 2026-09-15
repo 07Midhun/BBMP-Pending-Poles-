@@ -14,6 +14,7 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from io import BytesIO
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 from threading import Lock
 
 # Ensure backend directory is in sys.path for module resolution
