@@ -1230,17 +1230,20 @@ LIVE_PENDING_CACHE: Optional[List[Dict[str, Any]]] = None
 LIVE_PENDING_CACHE_TIME: float = 0.0
 LIVE_PENDING_CACHE_TTL_SECONDS = 300
 LIVE_PENDING_CACHE_LOCK = Lock()
+_INITIAL_CACHE_EVENT = threading.Event()
 _IS_REFRESHING_LIVE_DATA = False
 
 
 def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
     """Return live pending poles with a non-blocking thread-safe cache.
 
-    Normal HTTP user requests (force_refresh=False) return the in-memory cache
-    or precomputed dataset instantly (< 0.001s). Heavy network fetching runs
-    exclusively in the background.
+    If cache is cold on boot, wait up to 15s for the initial background load.
+    Once ready, normal HTTP user requests return the live cache instantly (< 0.001s).
     """
     global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME, _IS_REFRESHING_LIVE_DATA
+
+    if not force_refresh and LIVE_PENDING_CACHE is None:
+        _INITIAL_CACHE_EVENT.wait(timeout=15.0)
 
     if not force_refresh:
         if LIVE_PENDING_CACHE is not None:
@@ -1262,6 +1265,7 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
 
             LIVE_PENDING_CACHE = refreshed
             LIVE_PENDING_CACHE_TIME = refreshed_time
+            _INITIAL_CACHE_EVENT.set()
             return refreshed
         except Exception as exc:
             print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Using existing data.", file=sys.stderr)
@@ -1679,7 +1683,7 @@ async def upload_master_excel(
 # ============================================================
 
 LIGHTPOINT_PAGE_SIZE = 1024
-LIGHTPOINT_MAX_WORKERS = 4
+LIGHTPOINT_MAX_WORKERS = 8
 
 
 def _tb_latest_attribute(entity: Dict[str, Any], key: str) -> Any:
@@ -1874,7 +1878,7 @@ def installed_poles_test():
 # SCHNELL IOT POLE SURVEY TEST
 # ============================================================
 POLE_SURVEY_PAGE_SIZE = 1024
-POLE_SURVEY_MAX_WORKERS = 4
+POLE_SURVEY_MAX_WORKERS = 8
 
 
 def _fetch_pole_survey_page(
