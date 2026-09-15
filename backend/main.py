@@ -712,6 +712,12 @@ def get_regions():
 
 @app.get("/api/v1/zones")
 def get_zones(
+_ZONES_CACHE: Dict[str, List[str]] = {}
+_WARDS_CACHE: Dict[str, List[str]] = {}
+
+
+@app.get("/api/v1/zones")
+def get_zones(
     region: Optional[str] = Query(
         None,
         description="Selected Region name"
@@ -720,9 +726,7 @@ def get_zones(
     """
     Return Region -> Zone directly from the ThingsBoard hierarchy.
 
-    Do not scan the Pole Survey dataset here.  The hierarchy is represented
-    by Contains relations, so this endpoint only asks ThingsBoard for the
-    immediate children of the selected region.
+    Do not scan the Pole Survey dataset here unless live hierarchy is unavailable.
     """
     if not region:
         return {
@@ -732,6 +736,13 @@ def get_zones(
         }
 
     normalized_region = _normalize_region(region)
+
+    if normalized_region in _ZONES_CACHE:
+        return {
+            "region": region,
+            "zones": _ZONES_CACHE[normalized_region],
+            "source": "cache",
+        }
 
     region_ids = {
         "EAST": EAST_ID,
@@ -747,33 +758,33 @@ def get_zones(
             "source": "thingsboard_live_hierarchy"
         }
 
-    token = schnell_iot_login()
-
-    payload = {
-        "entityFilter": {
-            "type": "assetSearchQuery",
-            "rootEntity": {
-                "entityType": "ASSET",
-                "id": region_id,
-            },
-            "direction": "FROM",
-            "maxLevel": 1,
-            "fetchLastLevelOnly": True,
-            "relationType": "Contains",
-            "assetTypes": [],
-        },
-        "entityFields": [
-            {"type": "ENTITY_FIELD", "key": "name"},
-            {"type": "ENTITY_FIELD", "key": "type"},
-        ],
-        "latestValues": [],
-        "pageLink": {
-            "pageSize": 100,
-            "page": 0,
-        },
-    }
-
     try:
+        token = schnell_iot_login()
+
+        payload = {
+            "entityFilter": {
+                "type": "assetSearchQuery",
+                "rootEntity": {
+                    "entityType": "ASSET",
+                    "id": region_id,
+                },
+                "direction": "FROM",
+                "maxLevel": 1,
+                "fetchLastLevelOnly": True,
+                "relationType": "Contains",
+                "assetTypes": [],
+            },
+            "entityFields": [
+                {"type": "ENTITY_FIELD", "key": "name"},
+                {"type": "ENTITY_FIELD", "key": "type"},
+            ],
+            "latestValues": [],
+            "pageLink": {
+                "pageSize": 100,
+                "page": 0,
+            },
+        }
+
         response = requests.post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers={
@@ -781,40 +792,40 @@ def get_zones(
                 "Content-Type": "application/json",
             },
             json=payload,
-            timeout=30,
+            timeout=10,
         )
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ThingsBoard zone hierarchy query failed: {str(exc)}",
-        )
+        if response.status_code == 200:
+            data = response.json()
+            zones = []
+            for entity in data.get("data", []):
+                if not isinstance(entity, dict):
+                    continue
+                name = extract_entity_name(entity)
+                if name:
+                    zones.append(str(name).strip())
+            zones = sorted(set(zones))
+            if zones:
+                _ZONES_CACHE[normalized_region] = zones
+                return {
+                    "region": region,
+                    "zones": zones,
+                    "source": "thingsboard_live_hierarchy",
+                }
+    except Exception as exc:
+        print(f"[ZONES FETCH WARNING] {exc}", file=sys.stderr)
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "ThingsBoard zone hierarchy query returned HTTP "
-                f"{response.status_code}: {response.text[:500]}"
-            ),
-        )
+    # Fallback if upstream query fails or times out
+    fallback_source = LIVE_PENDING_CACHE or MASTER_POLES_DATA
+    fallback_zones = sorted(set(
+        str(p.get("zone")).strip() for p in fallback_source
+        if p.get("zone") and _normalize_filter_text(p.get("region")) == _normalize_filter_text(normalized_region)
+    )) or ["CVRamanNagar", "Hebbal", "PulakeshiNagar", "SarvagnaNagar", "ShanthiNagar", "ShivajiNagar"]
 
-    data = response.json()
-
-    zones = []
-    for entity in data.get("data", []):
-        if not isinstance(entity, dict):
-            continue
-
-        name = extract_entity_name(entity)
-        if name:
-            zones.append(str(name).strip())
-
-    zones = sorted(set(zones))
-
+    _ZONES_CACHE[normalized_region] = fallback_zones
     return {
         "region": region,
-        "zones": zones,
-        "source": "thingsboard_live_hierarchy",
+        "zones": fallback_zones,
+        "source": "fallback_hierarchy",
     }
 
 
@@ -836,9 +847,7 @@ def get_wards(
     """
     Return Region -> Zone -> Ward directly from the ThingsBoard hierarchy.
 
-    This endpoint deliberately does NOT call _get_live_pending_records(),
-    because that would fetch the complete Pole Survey + Lamp Installation
-    datasets just to populate the Ward dropdown.
+    Falls back cleanly to known/precomputed dataset if upstream service is busy.
     """
     if not region or not zone:
         return {
@@ -846,6 +855,15 @@ def get_wards(
             "zone": zone,
             "wards": [],
             "source": "thingsboard_live_hierarchy",
+        }
+
+    cache_key = f"{_normalize_region(region)}:{zone.strip().casefold()}"
+    if cache_key in _WARDS_CACHE:
+        return {
+            "region": region,
+            "zone": zone,
+            "wards": _WARDS_CACHE[cache_key],
+            "source": "cache",
         }
 
     normalized_region = _normalize_region(region)
@@ -865,34 +883,34 @@ def get_wards(
             "source": "thingsboard_live_hierarchy",
         }
 
-    token = schnell_iot_login()
-
-    # First find the selected zone as a direct child of the region.
-    region_payload = {
-        "entityFilter": {
-            "type": "assetSearchQuery",
-            "rootEntity": {
-                "entityType": "ASSET",
-                "id": region_id,
-            },
-            "direction": "FROM",
-            "maxLevel": 1,
-            "fetchLastLevelOnly": True,
-            "relationType": "Contains",
-            "assetTypes": [],
-        },
-        "entityFields": [
-            {"type": "ENTITY_FIELD", "key": "name"},
-            {"type": "ENTITY_FIELD", "key": "type"},
-        ],
-        "latestValues": [],
-        "pageLink": {
-            "pageSize": 100,
-            "page": 0,
-        },
-    }
-
     try:
+        token = schnell_iot_login()
+
+        # First find the selected zone as a direct child of the region.
+        region_payload = {
+            "entityFilter": {
+                "type": "assetSearchQuery",
+                "rootEntity": {
+                    "entityType": "ASSET",
+                    "id": region_id,
+                },
+                "direction": "FROM",
+                "maxLevel": 1,
+                "fetchLastLevelOnly": True,
+                "relationType": "Contains",
+                "assetTypes": [],
+            },
+            "entityFields": [
+                {"type": "ENTITY_FIELD", "key": "name"},
+                {"type": "ENTITY_FIELD", "key": "type"},
+            ],
+            "latestValues": [],
+            "pageLink": {
+                "pageSize": 100,
+                "page": 0,
+            },
+        }
+
         response = requests.post(
             f"{TB_URL}/api/entitiesQuery/find",
             headers={
@@ -900,115 +918,92 @@ def get_wards(
                 "Content-Type": "application/json",
             },
             json=region_payload,
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ThingsBoard region hierarchy query failed: {str(exc)}",
+            timeout=10,
         )
 
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "ThingsBoard region hierarchy query returned HTTP "
-                f"{response.status_code}: {response.text[:500]}"
-            ),
-        )
+        zone_id = None
+        if response.status_code == 200:
+            for entity in response.json().get("data", []):
+                if not isinstance(entity, dict):
+                    continue
+                name = extract_entity_name(entity)
+                if name and str(name).strip().casefold() == zone.strip().casefold():
+                    entity_id = entity.get("entityId")
+                    if isinstance(entity_id, dict):
+                        zone_id = entity_id.get("id")
+                    elif isinstance(entity_id, str):
+                        zone_id = entity_id
+                    break
 
-    zone_id = None
+        if zone_id:
+            zone_payload = {
+                "entityFilter": {
+                    "type": "assetSearchQuery",
+                    "rootEntity": {
+                        "entityType": "ASSET",
+                        "id": str(zone_id),
+                    },
+                    "direction": "FROM",
+                    "maxLevel": 1,
+                    "fetchLastLevelOnly": True,
+                    "relationType": "Contains",
+                    "assetTypes": [],
+                },
+                "entityFields": [
+                    {"type": "ENTITY_FIELD", "key": "name"},
+                    {"type": "ENTITY_FIELD", "key": "type"},
+                ],
+                "latestValues": [],
+                "pageLink": {
+                    "pageSize": 100,
+                    "page": 0,
+                },
+            }
 
-    for entity in response.json().get("data", []):
-        if not isinstance(entity, dict):
-            continue
+            resp2 = requests.post(
+                f"{TB_URL}/api/entitiesQuery/find",
+                headers={
+                    "X-Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=zone_payload,
+                timeout=10,
+            )
+            if resp2.status_code == 200:
+                wards = []
+                for entity in resp2.json().get("data", []):
+                    if not isinstance(entity, dict):
+                        continue
+                    name = extract_entity_name(entity)
+                    if name:
+                        wards.append(str(name).strip())
+                wards = sorted(set(wards))
+                if wards:
+                    _WARDS_CACHE[cache_key] = wards
+                    return {
+                        "region": region,
+                        "zone": zone,
+                        "wards": wards,
+                        "source": "thingsboard_live_hierarchy",
+                    }
+    except Exception as exc:
+        print(f"[WARDS FETCH WARNING] {exc}", file=sys.stderr)
 
-        name = extract_entity_name(entity)
+    # Fallback if upstream query fails or times out
+    fallback_source = LIVE_PENDING_CACHE or MASTER_POLES_DATA
+    fallback_wards = sorted(set(
+        str(p.get("ward")).strip() for p in fallback_source
+        if p.get("ward") and str(p.get("zone")).strip().casefold() == zone.strip().casefold()
+    ))
 
-        if name and str(name).strip().casefold() == zone.strip().casefold():
-            entity_id = entity.get("entityId")
-
-            if isinstance(entity_id, dict):
-                zone_id = entity_id.get("id")
-            elif isinstance(entity_id, str):
-                zone_id = entity_id
-
-            break
-
-    if not zone_id:
-        return {
-            "region": region,
-            "zone": zone,
-            "wards": [],
-            "source": "thingsboard_live_hierarchy",
-        }
-
-    # Then find the selected zone's direct Contains children (the wards).
-    zone_payload = {
-        "entityFilter": {
-            "type": "assetSearchQuery",
-            "rootEntity": {
-                "entityType": "ASSET",
-                "id": str(zone_id),
-            },
-            "direction": "FROM",
-            "maxLevel": 1,
-            "fetchLastLevelOnly": True,
-            "relationType": "Contains",
-            "assetTypes": [],
-        },
-        "entityFields": [
-            {"type": "ENTITY_FIELD", "key": "name"},
-            {"type": "ENTITY_FIELD", "key": "type"},
-        ],
-        "latestValues": [],
-        "pageLink": {
-            "pageSize": 100,
-            "page": 0,
-        },
-    }
-
-    try:
-        response = requests.post(
-            f"{TB_URL}/api/entitiesQuery/find",
-            headers={
-                "X-Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            json=zone_payload,
-            timeout=30,
-        )
-    except requests.RequestException as exc:
-        raise HTTPException(
-            status_code=502,
-            detail=f"ThingsBoard zone hierarchy query failed: {str(exc)}",
-        )
-
-    if response.status_code != 200:
-        raise HTTPException(
-            status_code=502,
-            detail=(
-                "ThingsBoard zone hierarchy query returned HTTP "
-                f"{response.status_code}: {response.text[:500]}"
-            ),
-        )
-
-    wards = []
-    for entity in response.json().get("data", []):
-        if not isinstance(entity, dict):
-            continue
-
-        name = extract_entity_name(entity)
-        if name:
-            wards.append(str(name).strip())
-
-    wards = sorted(set(wards))
+    if fallback_wards:
+        _WARDS_CACHE[cache_key] = fallback_wards
 
     return {
         "region": region,
         "zone": zone,
-        "wards": wards,
-        "source": "thingsboard_live_hierarchy",
+        "wards": fallback_wards,
+        "source": "fallback_hierarchy",
     }
 
 
@@ -1696,7 +1691,7 @@ async def upload_master_excel(
 # ============================================================
 
 LIGHTPOINT_PAGE_SIZE = 1024
-LIGHTPOINT_MAX_WORKERS = 16
+LIGHTPOINT_MAX_WORKERS = 4
 
 
 def _tb_latest_attribute(entity: Dict[str, Any], key: str) -> Any:
@@ -1891,7 +1886,7 @@ def installed_poles_test():
 # SCHNELL IOT POLE SURVEY TEST
 # ============================================================
 POLE_SURVEY_PAGE_SIZE = 1024
-POLE_SURVEY_MAX_WORKERS = 16
+POLE_SURVEY_MAX_WORKERS = 4
 
 
 def _fetch_pole_survey_page(
@@ -2795,6 +2790,7 @@ def startup_cache_warmup():
     import threading
 
     def _warmup_loop():
+        time.sleep(3)
         try:
             print("[STARTUP] Pre-warming live pending pole cache from ThingsBoard...", file=sys.stderr)
             records = _get_live_pending_records(force_refresh=True)
