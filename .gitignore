@@ -98,4 +98,10 @@ migrate_working_dir/
 .build/
 .buildlog/
 .svn/
-.swiftpm/
+.swiftpm/.env
+**/.env
+*.env
+backend/credentials/
+**/credentials/
+__pycache__/
+*.pyc
