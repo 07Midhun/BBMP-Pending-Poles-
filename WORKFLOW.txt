@@ -1,0 +1,1095 @@
+📱 BBMP PENDING POLES — Final Project Summary
+1. Project Objective
+
+The mobile application will be used to filter, identify, geographically organize, and locate BBMP pending poles.
+
+The user will select filtering criteria, after which the application will display the matching poles in a clear tabular format.
+
+The poles will be ordered based on their geographical distance from a selected starting pole, rather than by pole number.
+
+2. Main Application Heading
+
+The main screen will contain:
+
+BBMP PENDING POLES
+
+The application will have the following filtering sequence:
+
+Zone
+  ↓
+Ward
+  ↓
+Pole With Old Lamp
+  ↓
+Lamp Type
+  ↓
+Starting Pole
+  ↓
+View Poles
+  ↓
+Distance-based Pole Ordering
+  ↓
+Pole Table
+3. Zone Dropdown
+Field: Zone
+
+The Zone dropdown will contain all available zones from the source data.
+
+Example:
+
+Zone ▼
+────────────
+East
+West
+North
+South
+...
+Zone → Ward dependency
+
+Once the user selects a Zone, the application must display only the wards belonging to that selected Zone.
+
+For example:
+
+Zone = East
+
+will result in:
+
+Ward ▼
+────────────
+Ward 45
+Ward 46
+Ward 47
+Ward 48
+
+If the user changes the Zone, the Ward dropdown must automatically refresh.
+
+Recommended initial state
+Zone: Select Zone
+Ward: Select Zone First
+
+The Ward field becomes active after a Zone is selected.
+
+4. Ward Dropdown
+Field: Ward
+
+The Ward dropdown is completely dependent on the selected Zone.
+
+The application must not display wards belonging to other zones.
+
+For example:
+
+East → Ward 45, Ward 46, Ward 47
+West → Ward 60, Ward 61, Ward 62
+
+The user then selects the required Ward.
+
+5. Pole With Old Lamp
+Field: Pole With Old Lamp
+
+This dropdown contains three classifications:
+
+Pole With Old Lamp ▼
+
+├── LED
+├── Non-LED
+└── Empty
+
+The selected value determines the available options in the Lamp Type dropdown.
+
+6. Lamp Type — Dynamic Dropdown
+
+The Lamp Type dropdown is dependent on Pole With Old Lamp.
+
+A. When LED is selected
+
+If:
+
+Pole With Old Lamp = LED
+
+then:
+
+Lamp Type ▼
+
+├── LED
+├── FLED
+├── LED-FLED
+└── LED-LED
+Important classification
+
+FLED belongs to the LED classification.
+
+Therefore:
+
+Lamp Type	Classification
+LED	LED
+FLED	LED
+LED-FLED	LED
+LED-LED	LED
+
+All four values must be treated as LED.
+
+7. Empty Classification
+
+If:
+
+Pole With Old Lamp = Empty
+
+then the Lamp Type dropdown should contain:
+
+Lamp Type ▼
+
+├── -
+└── Blank
+
+Here:
+
+- = hyphen value present in the source data
+Blank = empty/null lamp type
+
+For the UI, displaying "Blank" or "No Lamp Type" is preferable to showing an invisible empty option.
+
+8. Non-LED Classification
+
+If:
+
+Pole With Old Lamp = Non-LED
+
+then the Lamp Type dropdown should contain all valid lamp types other than the LED group and Empty group.
+
+The following values must therefore be excluded:
+
+LED
+FLED
+LED-FLED
+LED-LED
+-
+Blank
+
+For example, if the source data contains:
+
+LED
+FLED
+LED-FLED
+LED-LED
+CFL
+Sodium
+Halogen
+Tube
+-
+Blank
+
+then Non-LED will show:
+
+CFL
+Sodium
+Halogen
+Tube
+9. Data Filtering
+
+After the user selects:
+
+Zone
++
+Ward
++
+Pole With Old Lamp
++
+Lamp Type
+
+the application filters the source dataset using all selected conditions.
+
+For example:
+
+Zone       = East
+Ward       = Ward 45
+Old Lamp   = LED
+Lamp Type  = FLED
+
+The resulting data must satisfy:
+
+Zone = East
+AND
+Ward = Ward 45
+AND
+Lamp Classification = LED
+AND
+Lamp Type = FLED
+
+Only those matching poles will be displayed.
+
+10. Starting Pole
+
+After the filtering process, the application should provide another dropdown:
+
+Starting Pole
+
+The Starting Pole dropdown should contain only the poles returned by the selected filters.
+
+Example:
+
+Starting Pole ▼
+
+P0001
+P0010
+P0100
+P0200
+P0300
+
+The user chooses one pole as the geographical starting point.
+
+For example:
+
+Starting Pole = P0001
+11. Geographical Distance Calculation
+
+This is the core ordering requirement.
+
+The application must use the Latitude and Longitude of each pole to calculate its geographical distance from the selected Starting Pole.
+
+The pole number itself must not be used to determine geographical proximity.
+
+For example:
+
+Starting Pole = P0001
+
+P0001 → 12.98204, 77.67365
+P0010 → 12.98210, 77.67372
+P0100 → 12.98215, 77.67380
+P0200 → 12.98300, 77.67500
+P0300 → 12.98400, 77.67600
+
+The application calculates the distance from P0001 to every other filtered pole.
+
+12. Distance-Based Ordering
+
+The application will use Option A — Distance from Starting Pole.
+
+Example:
+
+Order	Pole Number	Distance from P0001
+1	P0001	0 m
+2	P0010	15 m
+3	P0100	30 m
+4	P0200	75 m
+5	P0300	140 m
+
+The final order is:
+
+P0001
+↓
+P0010
+↓
+P0100
+↓
+P0200
+↓
+P0300
+
+In other words:
+
+The closest pole to the Starting Pole appears first, followed by the next closest pole, continuing from nearest to farthest.
+
+13. Distance Calculation Method
+
+The distance must be calculated using:
+
+Latitude
++
+Longitude
+
+A geographical distance formula such as the Haversine formula can be used.
+
+The system should calculate the distance between:
+
+Starting Pole
+        ↓
+Every filtered pole
+
+Then sort the results in ascending order of distance.
+
+Example
+Starting Pole = P0001
+
+P0001 → 0 m
+P0010 → 15 m
+P0100 → 30 m
+P0200 → 75 m
+P0300 → 140 m
+14. Final Result — Table View
+
+Instead of KPI cards or individual pole cards, the primary result should be a responsive mobile table.
+
+Filtered Pending Poles
+#	Pole Number	Distance	Location
+1	P0001	0 m	📍 View Map
+2	P0010	15 m	📍 View Map
+3	P0100	30 m	📍 View Map
+4	P0200	75 m	📍 View Map
+5	P0300	140 m	📍 View Map
+
+This is the preferred presentation because the user can quickly compare:
+
+Order → Pole → Distance → Location
+
+15. Location / Google Maps
+
+The source data will contain:
+
+Pole Number
+Latitude
+Longitude
+
+For example:
+
+Pole Number	Latitude	Longitude
+P0001	12.98204	77.67365
+P0010	12.98210	77.67372
+P0100	12.98215	77.67380
+
+The application will use the latitude and longitude to generate the Google Maps location.
+
+The table will display:
+
+📍 View Map
+
+When the user taps it, the corresponding pole's location opens in Google Maps.
+
+There is no requirement to manually store a Google Maps URL if latitude and longitude are already available.
+
+16. Recommended Table Structure
+
+For mobile, I recommend the table to contain only the information that is useful to the field user:
+
+#	Pole Number	Distance	Location
+1	P0001	0 m	📍 Map
+2	P0010	15 m	📍 Map
+3	P0100	30 m	📍 Map
+
+The raw latitude and longitude do not need to be displayed in the main table.
+
+They can remain as underlying data used to open the map.
+
+17. Responsive Mobile Table
+
+Because this is a mobile application, the table should be designed specifically for smaller screens.
+
+Recommended behavior:
+
+Compact column widths
+Fixed/sticky table header
+Vertical scrolling for large datasets
+View Map as a clickable action
+Distance displayed as m for smaller distances
+Distance displayed as km for larger distances
+
+For example:
+
+┌──────────────────────────────────────┐
+│ # │ POLE NO. │ DISTANCE │ LOCATION  │
+├──────────────────────────────────────┤
+│ 1 │ P0001    │ 0 m      │ 📍 Map    │
+│ 2 │ P0010    │ 15 m     │ 📍 Map    │
+│ 3 │ P0100    │ 30 m     │ 📍 Map    │
+│ 4 │ P0200    │ 75 m     │ 📍 Map    │
+│ 5 │ P0300    │ 140 m    │ 📍 Map    │
+└──────────────────────────────────────┘
+
+If there are many poles, the table continues vertically with scrolling.
+
+18. Filtered Pole Count
+
+A small count above the table would also be useful.
+
+For example:
+
+Filtered Poles: 27
+
+Then:
+
+Starting Pole: P0001
+
+Filtered Poles: 27
+
+┌──────────────────────────────────────┐
+│ # │ Pole No. │ Distance │ Location  │
+├──────────────────────────────────────┤
+│ 1 │ P0001    │ 0 m      │ 📍 Map    │
+│ 2 │ P0010    │ 15 m     │ 📍 Map    │
+│ ...                                  │
+└──────────────────────────────────────┘
+
+This is not a KPI card; it's simply a useful result count.
+
+19. Clear Filters
+
+A Clear Filters option should be included.
+
+When selected, it resets:
+
+Zone
+Ward
+Pole With Old Lamp
+Lamp Type
+Starting Pole
+
+and returns the screen to its initial state.
+
+20. Complete Application Flow
+                 BBMP PENDING POLES
+                         │
+                         ▼
+                    SELECT ZONE
+                         │
+                         ▼
+              LOAD CORRESPONDING WARDS
+                         │
+                         ▼
+                    SELECT WARD
+                         │
+                         ▼
+              SELECT POLE WITH OLD LAMP
+                         │
+             ┌───────────┼───────────┐
+             ▼           ▼           ▼
+            LED       NON-LED      EMPTY
+             │           │           │
+             ▼           ▼           ▼
+       LED/FLED/      Other       - / Blank
+       LED-FLED/      Types
+       LED-LED
+             │           │           │
+             └───────────┼───────────┘
+                         ▼
+                  FILTER DATA
+                         │
+                         ▼
+                GET MATCHING POLES
+                         │
+                         ▼
+                SELECT STARTING POLE
+                         │
+                         ▼
+             GET LATITUDE & LONGITUDE
+                         │
+                         ▼
+             CALCULATE DISTANCES
+                         │
+                         ▼
+              SORT NEAREST → FARTHEST
+                         │
+                         ▼
+                  DISPLAY TABLE
+                         │
+                         ▼
+                  📍 VIEW MAP
+21. Final Functional Specification
+Component	Final Requirement
+Application Name	BBMP Pending Poles
+Zone	Dropdown
+Ward	Dependent on selected Zone
+Pole With Old Lamp	LED / Non-LED / Empty
+LED Types	LED / FLED / LED-FLED / LED-LED
+FLED Classification	LED
+Empty Types	- / Blank
+Non-LED Types	All valid types excluding LED group and Empty
+Starting Pole	Selected from filtered poles
+Pole Location	Latitude + Longitude
+Distance Calculation	Geographical distance
+Distance Reference	Selected Starting Pole
+Sorting	Nearest → Farthest
+Result Format	Responsive table
+Result Columns	# / Pole Number / Distance / Location
+Map Action	View exact location in Google Maps
+Pole Count	Display filtered pole count
+Clear Filters	Reset all selections
+Large Dataset	Scrollable table
+🎯 Final concept
+
+The application is essentially a BBMP pole filtering + geographical proximity tool:
+
+Select the area → classify the old lamp → filter the poles → select a starting pole → calculate distance from that pole → display the nearest poles first → open any pole directly in Google Maps.
+
+This is now a clean Version 1 functional specification, and any changes you make during implementation can be added to this structure without changing the fundamental workflow.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+1. What we are building
+
+The project is:
+
+BBMP Pending Poles mobile application
+
+The intended workflow is:
+
+Region
+   ↓
+Zone
+   ↓
+Ward
+   ↓
+Pole With Old Lamp
+   ├── LED
+   ├── Non-LED
+   └── Empty
+          ↓
+      Lamp Type
+          ↓
+     Starting Pole
+          ↓
+   Nearby/ordered pending poles
+          ↓
+      Pole details
+          ↓
+   Installation / image workflow
+
+The project has two main parts:
+
+D:\MIDHUN\MOBILE_APP
+│
+├── backend
+│   ├── main.py              ← active FastAPI backend
+│   ├── excel_parser.py
+│   └── test_backend.py
+│
+└── mobile
+    └── lib
+        ├── main.dart
+        ├── models
+        │   └── pole_model.dart
+        ├── screens
+        │   └── home_screen.dart
+        ├── services
+        │   ├── api_service.dart
+        │   ├── pole_service.dart
+        │   └── sample_dataset.dart
+        └── utils
+            └── haversine.dart
+
+The ZIP you provided contains the complete project, including the Git repository and generated Flutter/build files. The important application source is the structure above.
+
+2. What we have already done
+A. Backend was created
+
+The Python backend is FastAPI-based and exposes the mobile application's API.
+
+It has APIs for:
+
+GET  /api/v1/regions
+GET  /api/v1/zones
+GET  /api/v1/wards
+GET  /api/v1/pole-with-old-lamp-options
+GET  /api/v1/lamp-types
+POST /api/v1/poles/filter
+POST /api/v1/poles/calculate-distance
+
+There are also ThingsBoard/live-data endpoints.
+
+B. Region → Zone → Ward hierarchy was implemented
+
+We moved toward dependent filtering:
+
+Region selected
+    ↓
+only zones for that region
+
+Zone selected
+    ↓
+only wards for that region + zone
+
+The backend's zone endpoint filters the pending dataset by region, and the ward endpoint filters by both region and zone.
+
+This is why your screenshot is now successfully getting to:
+
+Region: EAST
+Zone: Hebbal
+Ward: HEB-W62
+
+So the hierarchy problem is substantially solved.
+
+C. ThingsBoard live integration was added
+
+The backend is no longer supposed to depend on the old static/sample dataset for production filtering.
+
+The current production filtering path calls:
+
+_get_live_pending_records()
+
+and obtains:
+
+Live Pole Survey
+        -
+Live Lamp Installation
+        =
+Live Pending Poles
+
+The backend fetches the complete Pole Survey and installed light-point datasets from ThingsBoard.
+
+The live cache has:
+
+TTL = 300 seconds
+
+so it is refreshed every 5 minutes when needed. A force-refresh endpoint also exists:
+
+POST /api/v1/schnell-iot/refresh-live-cache
+
+D. The backend was changed so live failures aren't supposed to silently fall back to sample data
+
+This is important.
+
+The current /poles/filter production path explicitly uses live ThingsBoard data:
+
+results = _get_live_pending_records().copy()
+
+rather than silently using the old sample dataset.
+
+That is the correct direction for the production application.
+
+E. Flutter asynchronous filtering was improved
+
+The Flutter screen already contains a selection-generation mechanism.
+
+For example:
+
+User changes Region
+       ↓
+request starts
+       ↓
+User changes something again
+       ↓
+older request becomes obsolete
+       ↓
+older response should not overwrite newer selection
+
+This is a good design because your app performs several asynchronous API requests.
+
+The code uses _selectionGeneration, _distanceRequestId, and _lampTypeRequestId to protect against stale responses.
+
+So we shouldn't throw this mechanism away.
+
+3. What is currently broken
+
+This is the issue shown in your screenshot:
+
+EAST
+ ↓
+Hebbal
+ ↓
+HEB-W62
+ ↓
+Empty
+ ↓
+Starting Pole
+
+"No Pending Poles Available"
+
+The important point is:
+
+The Starting Pole widget itself is not the root problem.
+
+The Starting Pole list is populated from:
+
+filtered poles returned by backend
+
+The Flutter code does essentially:
+
+API returns poles
+       ↓
+_filteredPoles = poles
+       ↓
+_startingPoles = poles.map(poleNumber)
+
+If _filteredPoles is empty, Starting Pole has nothing to show.
+
+So we need to find why the filter result becomes empty.
+
+4. The first confirmed backend problem
+
+The current live classifier is:
+
+_classify_live_pole_lamp()
+
+It parses lampProfiles.
+
+Currently the logic is essentially:
+
+No profiles
+    → Empty / -
+
+Profiles contain LED/FLED
+    → LED
+
+Everything else
+    → Non-LED
+
+The problem is that an existing profile containing something like:
+
+-
+Blank
+BLANK
+NONE
+NULL
+
+can be treated incorrectly.
+
+But your application explicitly defines Empty as having:
+
+-
+Blank
+
+The /lamp-types API already returns those values for Empty.
+
+Therefore the classification logic and filter-option logic aren't fully consistent.
+
+This can cause:
+ThingsBoard
+    ↓
+Pole actually has an empty/blank lamp
+    ↓
+backend classifies it as Non-LED
+    ↓
+user selects Empty
+    ↓
+backend finds 0
+    ↓
+Starting Pole says:
+"No Pending Poles Available"
+
+This is one of the first things we need to fix and verify.
+
+5. There is another important problem: API errors and empty results aren't clearly separated
+
+The Flutter app has several places where an API failure can ultimately leave the UI with:
+
+_startingPoles = []
+_filteredPoles = []
+
+For example, the screen clears these lists while changing selections and also clears them inside error handling.
+
+That means the user can see:
+
+No Pending Poles Available
+
+when the real situation might be:
+
+Backend request failed
+
+Those are completely different states.
+
+We need the UI to distinguish:
+
+Loading
+Loading pending poles...
+Genuine zero results
+No pending poles match these filters.
+API failure
+Unable to load pending poles.
+[Retry]
+
+This is particularly important because you said:
+
+it makes more mistakes when tried more than 2 times
+
+We should make repeated selection changes idempotent and reliable, rather than relying on the user trying again.
+
+6. What we should NOT do
+
+I don't want to continue with the previous pattern of:
+
+Something doesn't load
+    ↓
+change random code
+    ↓
+try again
+    ↓
+something else breaks
+    ↓
+add another patch
+
+That's exactly how these filter bugs become difficult to maintain.
+
+Also, your project contains many historical backend versions:
+
+main_backup.py
+main_before_hierarchy_zone_fix.py
+main_before_zone_fix.py
+main_wards_hierarchy_fast.py
+main_zones_fast.py
+main_zones_hierarchy_fast.py
+
+We should not randomly switch between them.
+
+The target should be:
+
+backend/main.py
+
+plus the current Flutter source under:
+
+mobile/lib/
+7. The next steps — in the correct order
+
+This is the part I recommend we follow strictly.
+
+STEP 1 — Establish a known-good backend baseline
+
+Before changing Flutter, test the backend independently.
+
+We need to verify:
+
+GET /
+GET /api/v1/regions
+GET /api/v1/zones?region=EAST
+GET /api/v1/wards?region=EAST&zone=Hebbal
+
+Then specifically:
+
+POST /api/v1/poles/filter
+
+with:
+
+{
+  "region": "EAST",
+  "zone": "Hebbal",
+  "ward": "HEB-W62",
+  "pole_old_lamp": "Empty",
+  "lamp_type": "-"
+}
+
+This tells us whether the problem exists before Flutter.
+
+8. STEP 2 — Verify the actual ThingsBoard records
+
+We already know ThingsBoard contains HEB-W62 records.
+
+For example, the live data includes:
+
+W62-SP0022
+W62-SP0077
+W62-SP0085
+
+and corresponding pole names such as:
+
+GBA-SNL-W62-P0581-SP0022
+GBA-SNL-W62-P1914-SP0077
+GBA-SNL-W62-P2139-SP0085
+
+So we need to inspect their actual lampProfiles.
+
+The question is:
+
+For HEB-W62,
+what does ThingsBoard actually send in lampProfiles?
+
+That will prove whether the Empty classification is the problem.
+
+9. STEP 3 — Fix the live lamp classification
+
+We'll make the classification deterministic.
+
+Conceptually:
+
+lampProfiles empty
+        ↓
+Empty / -
+
+lampProfiles contains only blank values
+        ↓
+Empty / -
+
+lampProfiles contains LED/FLED only
+        ↓
+LED
+
+anything else
+        ↓
+Non-LED
+
+Then /lamp-types and /poles/filter will use the same definition.
+
+10. STEP 4 — Make the backend refresh safely
+
+The live cache currently uses:
+
+5-minute TTL
+
+and a force refresh exists.
+
+That's good, but we need to make sure a failed ThingsBoard refresh doesn't replace a previously valid cache with an empty dataset.
+
+The safe behavior should be:
+
+Existing valid cache
+        ↓
+refresh requested
+        ↓
+ThingsBoard succeeds
+        ↓
+replace cache
+
+but:
+
+Existing valid cache
+        ↓
+refresh requested
+        ↓
+ThingsBoard fails
+        ↓
+keep previous valid cache
+        ↓
+return error status
+
+That prevents a temporary ThingsBoard failure from making the mobile app appear to have zero poles.
+
+11. STEP 5 — Fix Flutter error/state handling
+
+The Flutter app should maintain three states:
+
+LOADING
+SUCCESS
+ERROR
+
+and distinguish those from:
+
+SUCCESS + ZERO RESULTS
+
+For example:
+
+_loadingPoles = true
+_poleLoadError = null
+
+then:
+
+Successful response
+_loadingPoles = false
+_poleLoadError = null
+_filteredPoles = returned poles
+Empty response
+_loadingPoles = false
+_poleLoadError = null
+_filteredPoles = []
+Failed response
+_loadingPoles = false
+_poleLoadError = "Unable to load..."
+
+Do not clear a valid previous result merely because a newer request temporarily fails.
+
+12. STEP 6 — Make Starting Pole dependent only on the successful filter result
+
+The final chain should be:
+
+Filter request
+      ↓
+successful response?
+      │
+      ├── NO → show retry/error
+      │
+      └── YES
+           ↓
+       poles.length
+           │
+           ├── 0 → genuine "No pending poles"
+           │
+           └── >0
+                ↓
+          populate Starting Pole
+
+That makes the behavior predictable.
+
+13. STEP 7 — Test the exact sequence that is currently failing
+
+We should test this exact sequence, not just randomly click around:
+
+Clear Filters
+
+EAST
+ ↓
+Hebbal
+ ↓
+HEB-W62
+ ↓
+Empty
+ ↓
+Lamp Type "-"
+ ↓
+Starting Pole
+
+Then repeat it several times:
+
+Test 1
+Test 2
+Test 3
+Test 4
+Test 5
+
+Then test transitions:
+
+EAST → Hebbal → HEB-W62 → Empty
+        ↓
+change Ward
+        ↓
+change back to HEB-W62
+
+and:
+
+Empty → LED → Empty → Non-LED → Empty
+
+The result must remain deterministic.
+
+14. STEP 8 — Test the full application
+
+Only after the above works should we test:
+
+Starting Pole
+      ↓
+distance calculation
+      ↓
+ordered nearby poles
+      ↓
+pole selection
+      ↓
+pole details
+      ↓
+installation workflow
+      ↓
+images / submission
+
+This prevents us from debugging five layers simultaneously.
+
+Current project status
+Component	Status
+Flutter project	✅ Exists
+FastAPI backend	✅ Exists
+ThingsBoard integration	✅ Exists
+Live pending-pole calculation	✅ Implemented
+5-minute live cache	✅ Implemented
+Force live refresh endpoint	✅ Implemented
+Region dropdown	✅ Working
+Zone hierarchy	✅ Working
+Ward hierarchy	✅ Working
+Pole With Old Lamp	⚠️ Needs validation
+Lamp Type	⚠️ Needs validation
+Starting Pole	❌ Current visible failure
+Live Empty classification	⚠️ Suspected logic issue
+API error vs empty-state handling	⚠️ Needs improvement
+Repeated filter reliability	❌ Not yet proven
+Full end-to-end testing	❌ Not yet completed
+The most important conclusion
+
+We are not starting over.
+
+A substantial part of the architecture is already in place. The current problem is that the last part of the chain — live filtered pending poles → Starting Pole — isn't reliable enough.
+
+Our next move should therefore be diagnosis first, then one consolidated fix, not another series of guesses.
+
+so this is the implementation that has been done till now and the next stteps also been given in the summary way now i need u not to remove these functions like extracted data from iot let this flow be like this itself but i need the better improvement as i am developing a mobile application that to be used offline and also online keep it in my mind for each and every user they should feel this app to convenient and consistent for using the app . At firsst give me your understandings of this app development then any doubts ask me i will clarify iit then we can start the implementation then we are going to have a great time after developing correctly without any errors .So make the ui also very attractive and display the dashboard in the chrome like displaying in the mobile app . One thing that is i didn't conneced with mobile because it shows some error so i taught to finish all works by viewing in the chrome for backend then while moving to ui development we can go with conencting the mobile......
