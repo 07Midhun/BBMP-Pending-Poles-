@@ -10,20 +10,20 @@ class ApiService {
   // Backend running on the PC.
   // This IP successfully responds from your PC.
   static String activeBaseUrl =
-      'http://192.168.3.149:8000/api/v1';
+      'https://bbmp-pending-poles-4.onrender.com/api/v1';
 
   static List<String> get _candidateUrls {
     if (kIsWeb) {
       return [
         // Main PC Ethernet IP.
-        'http://192.168.3.149:8000/api/v1',
+        'https://bbmp-pending-poles-4.onrender.com/api/v1',
 
         // PC Wi-Fi IP, kept as a fallback.
         'http://192.168.9.244:8000/api/v1',
 
         // Localhost fallbacks for Flutter Web.
-        'http://localhost:8000/api/v1',
-        'http://127.0.0.1:8000/api/v1',
+        'https://bbmp-pending-poles-4.onrender.com/api/v1',
+        'https://bbmp-pending-poles-4.onrender.com/api/v1',
 
         // Previous possible network address.
         'http://10.150.197.63:8000/api/v1',
@@ -33,7 +33,7 @@ class ApiService {
     // Android physical phone.
     return [
       // Main PC Ethernet IP.
-      'http://192.168.3.149:8000/api/v1',
+      'https://bbmp-pending-poles-4.onrender.com/api/v1',
 
       // PC Wi-Fi IP.
       'http://192.168.9.244:8000/api/v1',
@@ -42,8 +42,8 @@ class ApiService {
       'http://10.0.2.2:8000/api/v1',
 
       // Localhost fallbacks.
-      'http://localhost:8000/api/v1',
-      'http://127.0.0.1:8000/api/v1',
+      'https://bbmp-pending-poles-4.onrender.com/api/v1',
+      'https://bbmp-pending-poles-4.onrender.com/api/v1',
     ];
   }
 
