@@ -2231,12 +2231,30 @@ def pole_survey_test():
 
 
 def _fetch_all_bangalore_pole_survey_records(token: str) -> List[Dict[str, Any]]:
-    """Fetch and return the complete Bangalore Pole Survey records."""
+    """Fetch and return the complete Bangalore Pole Survey records with streaming low-memory parsing."""
     first_page = _fetch_bangalore_pole_survey_page(token, 0, POLE_SURVEY_PAGE_SIZE)
     total_pages = int(first_page.get("totalPages") or 1)
-    pages: Dict[int, Dict[str, Any]] = {0: first_page}
-    remaining = list(range(1, total_pages))
+    
+    records: List[Dict[str, Any]] = []
+    seen: set[str] = set()
 
+    def process_entities(entities: list):
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            record = _simplify_pole_survey(entity)
+            if not record:
+                continue
+            pole_number = _normalize_pole_number(record.get("pole_number"))
+            if not pole_number or pole_number in seen:
+                continue
+            seen.add(pole_number)
+            records.append(record)
+
+    process_entities(first_page.get("data", []))
+    del first_page
+
+    remaining = list(range(1, total_pages))
     if remaining:
         workers = min(POLE_SURVEY_MAX_WORKERS, len(remaining))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -2250,23 +2268,10 @@ def _fetch_all_bangalore_pole_survey_records(token: str) -> List[Dict[str, Any]]
                 for page in remaining
             }
             for future in as_completed(futures):
-                page = futures[future]
-                pages[page] = future.result()
+                page_data = future.result()
+                process_entities(page_data.get("data", []))
+                del page_data
 
-    records: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for page in range(total_pages):
-        for entity in pages.get(page, {}).get("data", []):
-            if not isinstance(entity, dict):
-                continue
-            record = _simplify_pole_survey(entity)
-            if not record:
-                continue
-            pole_number = _normalize_pole_number(record.get("pole_number"))
-            if not pole_number or pole_number in seen:
-                continue
-            seen.add(pole_number)
-            records.append(record)
     return records
 
 
@@ -2322,12 +2327,30 @@ def _fetch_bangalore_pole_survey_page(
 
 
 def _fetch_all_bangalore_installed_records(token: str) -> List[Dict[str, Any]]:
-    """Fetch and return all unique installed lightPoint records."""
+    """Fetch and return all unique installed lightPoint records with streaming low-memory parsing."""
     first_page = _fetch_lightpoint_page(token, 0, LIGHTPOINT_PAGE_SIZE)
     total_pages = int(first_page.get("totalPages") or 1)
-    pages: Dict[int, Dict[str, Any]] = {0: first_page}
-    remaining = list(range(1, total_pages))
+    
+    records: List[Dict[str, Any]] = []
+    seen: set[str] = set()
 
+    def process_entities(entities: list):
+        for entity in entities:
+            if not isinstance(entity, dict):
+                continue
+            record = _simplify_installed_lightpoint(entity)
+            if not record:
+                continue
+            pole_id = _normalize_pole_number(record.get("pole_id"))
+            if not pole_id or pole_id in seen:
+                continue
+            seen.add(pole_id)
+            records.append(record)
+
+    process_entities(first_page.get("data", []))
+    del first_page
+
+    remaining = list(range(1, total_pages))
     if remaining:
         workers = min(LIGHTPOINT_MAX_WORKERS, len(remaining))
         with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -2341,24 +2364,12 @@ def _fetch_all_bangalore_installed_records(token: str) -> List[Dict[str, Any]]:
                 for page in remaining
             }
             for future in as_completed(futures):
-                page = futures[future]
-                pages[page] = future.result()
+                page_data = future.result()
+                process_entities(page_data.get("data", []))
+                del page_data
 
-    records: List[Dict[str, Any]] = []
-    seen: set[str] = set()
-    for page in range(total_pages):
-        for entity in pages.get(page, {}).get("data", []):
-            if not isinstance(entity, dict):
-                continue
-            record = _simplify_installed_lightpoint(entity)
-            if not record:
-                continue
-            pole_id = _normalize_pole_number(record.get("pole_id"))
-            if not pole_id or pole_id in seen:
-                continue
-            seen.add(pole_id)
-            records.append(record)
     return records
+
 
 
 # ============================================================
