@@ -206,3 +206,4 @@ List<Pole> getInitialMasterBbmpPoles() {
 List<String> getInitialInstalledReport() {
   return ['P0001', 'P0001', 'P0100', 'P0100', 'P0200'];
 }
+

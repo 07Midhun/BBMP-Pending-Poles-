@@ -22,3 +22,4 @@ class Haversine {
     return degree * pi / 180.0;
   }
 }
+
