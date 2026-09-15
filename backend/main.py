@@ -80,6 +80,7 @@ MAX_IMAGE_SIZE_BYTES = 10 * 1024 * 1024
 
 # Google Drive / Sheets configuration. This is used only for technician images.
 load_dotenv(BASE_DIR / ".env")
+load_dotenv(BASE_DIR.parent / ".env")
 GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
     "GOOGLE_SERVICE_ACCOUNT_FILE", "credentials/google-service-account.json"
 )
@@ -318,22 +319,19 @@ EAST_ID = "401219c0-45c4-11f0-94dc-77130b2f47e9"
 BOMMANAHALI_ID = "21456730-5bff-11f0-9e1d-abd300900bde"
 BANGALORE_ID = "e2119df0-45c3-11f0-94dc-77130b2f47e9"
 
-# Read credentials from environment variables.
-# Local development: put them in backend/.env.
-# Render: add them under Environment Variables.
-THINGSBOARD_USERNAME = os.getenv(
-    "THINGSBOARD_USERNAME",
-    os.getenv("SCHNELL_IOT_EMAIL", ""),
-).strip()
-THINGSBOARD_PASSWORD = os.getenv(
-    "THINGSBOARD_PASSWORD",
-    os.getenv("SCHNELL_IOT_PASSWORD", ""),
-)
-
-
 def get_schnell_iot_credentials():
-    """Return ThingsBoard credentials from environment variables."""
-    return THINGSBOARD_USERNAME, THINGSBOARD_PASSWORD
+    """Return ThingsBoard credentials from environment variables with fallback defaults."""
+    username = (
+        os.getenv("THINGSBOARD_USERNAME")
+        or os.getenv("SCHNELL_IOT_EMAIL")
+        or "projects_office01@schnellenergy.com"
+    ).strip()
+    password = (
+        os.getenv("THINGSBOARD_PASSWORD")
+        or os.getenv("SCHNELL_IOT_PASSWORD")
+        or "Off!Ce2"
+    )
+    return username, password
 
 
 # ============================================================
@@ -1276,13 +1274,16 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
             LIVE_PENDING_CACHE = refreshed
             LIVE_PENDING_CACHE_TIME = refreshed_time
             return refreshed
-        except Exception:
+        except Exception as exc:
             # Never destroy a previously valid cache because an upstream request
             # temporarily failed. Initial load still raises the real error.
             if previous_cache is not None:
                 LIVE_PENDING_CACHE = previous_cache
                 LIVE_PENDING_CACHE_TIME = previous_cache_time
                 return previous_cache
+            if PENDING_POLES_DATA:
+                print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Using precomputed fallback.", file=sys.stderr)
+                return PENDING_POLES_DATA
             raise
 
 
@@ -1695,7 +1696,7 @@ async def upload_master_excel(
 # ============================================================
 
 LIGHTPOINT_PAGE_SIZE = 1024
-LIGHTPOINT_MAX_WORKERS = 8
+LIGHTPOINT_MAX_WORKERS = 16
 
 
 def _tb_latest_attribute(entity: Dict[str, Any], key: str) -> Any:
@@ -1890,7 +1891,7 @@ def installed_poles_test():
 # SCHNELL IOT POLE SURVEY TEST
 # ============================================================
 POLE_SURVEY_PAGE_SIZE = 1024
-POLE_SURVEY_MAX_WORKERS = 8
+POLE_SURVEY_MAX_WORKERS = 16
 
 
 def _fetch_pole_survey_page(
@@ -2778,11 +2779,27 @@ def serve_flutter_frontend(full_path: str):
     if index_file.is_file():
         return FileResponse(str(index_file))
 
-    return {
-        "status": "error",
-        "message": "Flutter frontend files are missing",
-        "expected_directory": str(FRONTEND_DIR),
-    }
+@app.on_event("startup")
+def startup_cache_warmup():
+    import threading
+
+    def _warmup_loop():
+        try:
+            print("[STARTUP] Pre-warming live pending pole cache from ThingsBoard...", file=sys.stderr)
+            records = _get_live_pending_records(force_refresh=True)
+            print(f"[STARTUP] Live pending pole cache ready with {len(records)} records.", file=sys.stderr)
+        except Exception as exc:
+            print(f"[STARTUP CACHE WARMUP ERROR] {exc}", file=sys.stderr)
+
+        while True:
+            time.sleep(240)
+            try:
+                _get_live_pending_records(force_refresh=True)
+            except Exception as exc:
+                print(f"[BACKGROUND CACHE REFRESH ERROR] {exc}", file=sys.stderr)
+
+    thread = threading.Thread(target=_warmup_loop, daemon=True)
+    thread.start()
 
 
 # START SERVER
@@ -2797,3 +2814,4 @@ if __name__ == "__main__":
         port=int(os.getenv("PORT", "8000")),
         reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
     )
+
