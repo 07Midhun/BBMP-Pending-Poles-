@@ -310,92 +310,29 @@ def _recompute_pending():
 # SCHNELL IOT / THINGSBOARD CONFIGURATION
 # ============================================================
 
-TB_URL = "https://schnelliot.in"
+TB_URL = os.getenv("THINGSBOARD_URL", "https://schnelliot.in").strip().rstrip("/")
 
-EAST_ID = (
-    "401219c0-45c4-11f0-94dc-77130b2f47e9"
+# These IDs identify the ThingsBoard hierarchy used by the BBMP project.
+EAST_ID = "401219c0-45c4-11f0-94dc-77130b2f47e9"
+BOMMANAHALI_ID = "21456730-5bff-11f0-9e1d-abd300900bde"
+BANGALORE_ID = "e2119df0-45c3-11f0-94dc-77130b2f47e9"
+
+# Read credentials from environment variables.
+# Local development: put them in backend/.env.
+# Render: add them under Environment Variables.
+THINGSBOARD_USERNAME = os.getenv(
+    "THINGSBOARD_USERNAME",
+    os.getenv("SCHNELL_IOT_EMAIL", ""),
+).strip()
+THINGSBOARD_PASSWORD = os.getenv(
+    "THINGSBOARD_PASSWORD",
+    os.getenv("SCHNELL_IOT_PASSWORD", ""),
 )
 
-BOMMANAHALI_ID = (
-    "21456730-5bff-11f0-9e1d-abd300900bde"
-)
-
-BANGALORE_ID = (
-    "e2119df0-45c3-11f0-94dc-77130b2f47e9"
-)
-
-
-# ============================================================
-# TERMINAL CREDENTIAL INPUT
-# ============================================================
-
-def ask_schnell_iot_credentials():
-    """
-    Ask for Schnell IoT credentials in the terminal.
-
-    The password is hidden while typing.
-
-    The credentials are placed into the current process
-    environment so that the Uvicorn reload process can inherit
-    them.
-
-    They are NOT written into this Python file.
-    """
-
-    print()
-    print("=" * 55)
-    print("        BBMP PENDING POLES BACKEND")
-    print("=" * 55)
-    print()
-    print("Schnell IoT / ThingsBoard Login")
-    print()
-
-    email = input(
-        "Schnell IoT Email: "
-    ).strip()
-
-    password = getpass.getpass(
-        "Schnell IoT Password: "
-    )
-
-    if not email:
-        print()
-        print("ERROR: Email cannot be empty.")
-        print()
-        return False
-
-    if not password:
-        print()
-        print("ERROR: Password cannot be empty.")
-        print()
-        return False
-
-    # Store only in the current process environment.
-    # Uvicorn's reload child process inherits these values.
-    os.environ["SCHNELL_IOT_EMAIL"] = email
-    os.environ["SCHNELL_IOT_PASSWORD"] = password
-
-    print()
-
-    return True
-
-
-# ============================================================
-# GET CURRENT CREDENTIALS
-# ============================================================
 
 def get_schnell_iot_credentials():
-    email = os.environ.get(
-        "SCHNELL_IOT_EMAIL",
-        ""
-    ).strip()
-
-    password = os.environ.get(
-        "SCHNELL_IOT_PASSWORD",
-        ""
-    )
-
-    return email, password
+    """Return ThingsBoard credentials from environment variables."""
+    return THINGSBOARD_USERNAME, THINGSBOARD_PASSWORD
 
 
 # ============================================================
