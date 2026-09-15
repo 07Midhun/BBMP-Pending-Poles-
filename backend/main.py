@@ -127,35 +127,67 @@ _google_services_lock = Lock()
 
 
 def _resolve_google_credentials_path() -> Path:
-    """Resolve the service-account JSON for both absolute and relative paths."""
-    if not GOOGLE_SERVICE_ACCOUNT_FILE:
-        raise RuntimeError(
-            "GOOGLE_SERVICE_ACCOUNT_FILE is missing from the project-root .env"
-        )
+    """
+    Resolve the Google service-account JSON file in local and Render setups.
 
-    configured = Path(
-        GOOGLE_SERVICE_ACCOUNT_FILE
-    ).expanduser()
+    Render Secret Files are mounted under /etc/secrets. The filename field in
+    Render must contain only the filename, for example:
 
-    if configured.is_absolute():
-        candidates = [configured]
+        google-service-account.json
+
+    The local project layout is also supported.
+    """
+    configured = GOOGLE_SERVICE_ACCOUNT_FILE.strip()
+
+    candidates = []
+
+    # 1. Explicit absolute path from the environment.
+    if configured:
+        configured_path = Path(configured).expanduser()
+        if configured_path.is_absolute():
+            candidates.append(configured_path)
+        else:
+            # 2. Render Secret File location.
+            candidates.append(Path("/etc/secrets") / configured_path.name)
+
+            # 3. Local project-root and backend-relative locations.
+            candidates.extend([
+                PROJECT_DIR / configured_path,
+                BASE_DIR / configured_path,
+            ])
+
+            # 4. If the configured value is only a filename, support the
+            # conventional local credentials folder too.
+            candidates.append(BASE_DIR / "credentials" / configured_path.name)
     else:
-        # For the user's .env, backend/credentials/... is relative to the
-        # project root. Also support credentials/... relative to backend.
-        candidates = [
-            PROJECT_DIR / configured,
-            BASE_DIR / configured,
-        ]
+        candidates.extend([
+            Path("/etc/secrets/google-service-account.json"),
+            BASE_DIR / "credentials" / "google-service-account.json",
+            PROJECT_DIR / "backend" / "credentials" / "google-service-account.json",
+        ])
 
+    # Always check the standard Render Secret File path as a final fallback.
+    candidates.append(Path("/etc/secrets/google-service-account.json"))
+
+    # Remove duplicates while preserving the diagnostic order.
+    unique_candidates = []
+    seen = set()
     for candidate in candidates:
-        candidate = candidate.resolve()
+        candidate = candidate.expanduser().resolve()
+        if str(candidate) not in seen:
+            seen.add(str(candidate))
+            unique_candidates.append(candidate)
+
+    for candidate in unique_candidates:
         if candidate.is_file():
             return candidate
 
-    checked = "\n".join(f"  - {p.resolve()}" for p in candidates)
+    checked = "\n".join(f"  - {candidate}" for candidate in unique_candidates)
     raise RuntimeError(
         "Google service-account JSON file was not found. Checked:\n"
         + checked
+        + "\n\nFor Render, create a Secret File named "
+          "'google-service-account.json'."
     )
 
 
@@ -753,7 +785,7 @@ def _recompute_pending():
 # SCHNELL IOT / THINGSBOARD CONFIGURATION
 # ============================================================
 
-TB_URL = "https://schnelliot.in"
+TB_URL = os.getenv("THINGSBOARD_URL", "https://schnelliot.in").strip().rstrip("/")
 
 EAST_ID = (
     "401219c0-45c4-11f0-94dc-77130b2f47e9"
