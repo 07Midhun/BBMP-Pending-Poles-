@@ -1,0 +1,23 @@
+{
+  "pole_number": "GBA-SNL-W61-P0018-SP001",
+  "latitude": 13.043308,
+  "longitude": 77.5723469,
+  "region": "EAST",
+  "zone": "Hebbal",
+  "ward": "HEB-W61",
+  "images": {
+    "1": {
+      "filename": "image_1.jpg",
+      "latitude": 13.043308,
+      "longitude": 77.5723469,
+      "uploaded_at": "2026-09-15T17:36:39.201018+00:00",
+      "source": "technician_app",
+      "google_drive_status": "uploaded",
+      "google_drive_file_id": "17rrbXXGihj-cWO-hD8idHiZSJFs9dQ0-",
+      "google_drive_filename": "GBA-SNL-W61-P0018-SP001_image_1.jpg",
+      "google_drive_url": "https://drive.google.com/file/d/17rrbXXGihj-cWO-hD8idHiZSJFs9dQ0-/view",
+      "google_sheet_status": "updated",
+      "google_sheet_error": null
+    }
+  }
+}

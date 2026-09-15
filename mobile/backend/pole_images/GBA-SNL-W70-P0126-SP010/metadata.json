@@ -1,0 +1,18 @@
+{
+  "pole_number": "GBA-SNL-W70-P0126-SP010",
+  "latitude": 13.01190365929373,
+  "longitude": 77.61456274964067,
+  "region": "EAST",
+  "zone": "PulakeshiNagar",
+  "ward": "PN-W70",
+  "images": {
+    "1": {
+      "filename": "image_1.jpg",
+      "latitude": 13.01190365929373,
+      "longitude": 77.61456274964067,
+      "uploaded_at": "2026-09-15T15:01:31.280473+00:00",
+      "source": "technician_app",
+      "google_drive_status": "pending"
+    }
+  }
+}

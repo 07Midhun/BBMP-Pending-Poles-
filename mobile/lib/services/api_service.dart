@@ -8,7 +8,7 @@ import '../models/pole_model.dart';
 
 class ApiService {
   // Backend deployed on Render.
-  static String activeBaseUrl = 'https://bbmp-pending-poles-5.onrender.com/api/v1';
+  static String activeBaseUrl = 'https://bbmp-pending-poles-7.onrender.com/';
 
   static List<String> get _candidateUrls {
     if (kIsWeb) {

@@ -15,10 +15,9 @@ def get_local_ip():
         return "127.0.0.1"
 
 def find_web_dir():
-    # Check if running from MOBILE_APP or mobile
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    option1 = os.path.join(current_dir, "build", "web")
-    option2 = os.path.join(current_dir, "mobile", "build", "web")
+    option1 = os.path.join(current_dir, "mobile", "build", "web")
+    option2 = os.path.join(current_dir, "build", "web")
     
     if os.path.isdir(option1):
         return option1
@@ -46,7 +45,6 @@ def main():
     print("=" * 65)
     print(f"  Serving Directory        : {web_dir}\n")
 
-    # Automatically open in default browser
     try:
         webbrowser.open(f"http://localhost:{port}")
     except Exception:
