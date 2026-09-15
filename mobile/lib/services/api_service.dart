@@ -7,8 +7,8 @@ import 'package:http/http.dart' as http;
 import '../models/pole_model.dart';
 
 class ApiService {
-  // Backend is running on the same PC as Flutter Web.
-  static String activeBaseUrl = 'http://localhost:8000/api/v1';
+  // Backend deployed on Render.
+  static String activeBaseUrl = 'https://bbmp-pending-poles-5.onrender.com/api/v1';
 
   static List<String> get _candidateUrls {
     if (kIsWeb) {
