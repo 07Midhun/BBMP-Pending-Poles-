@@ -80,23 +80,16 @@ def generate_sample_schnell_iot_data() -> Dict[str, Any]:
     """
     regions_zones = {
         "East": {
-            "East Zone": ["Ward 45", "Ward 46"],
+            "Hebbal": ["HEB-W59", "HEB-W60", "HEB-W61", "HEB-W62", "HEB-W63"],
+            "PulakeshiNagar": ["PN-W69", "PN-W70", "PN-W71", "PN-W72", "PN-W73"],
+            "CVRamanNagar": ["CVR-W50", "CVR-W51", "CVR-W52"],
+            "SarvagnaNagar": ["SAR-W80", "SAR-W81", "SAR-W82"],
+            "ShanthiNagar": ["SHA-W110", "SHA-W111"],
+            "ShivajiNagar": ["SHI-W90", "SHI-W91"],
         },
         "Bommanahalli": {
-            "Bommanahalli Zone": ["Ward 174", "Ward 175"],
+            "Bommanahali-Z1": ["BOM-W174", "BOM-W175", "BOM-W176"],
         },
-        "West": {
-            "West Zone": ["Ward 60", "Ward 61"],
-        },
-        "South": {
-            "South Zone": ["Ward 150", "Ward 151"],
-        },
-        "Mahadevapura": {
-            "Mahadevapura Zone": ["Ward 81", "Ward 82"],
-        },
-        "Yelahanka": {
-            "Yelahanka Zone": ["Ward 1", "Ward 2"],
-        }
     }
     
     lamp_types = ["LED", "FLED", "LED-FLED", "LED-LED", "CFL", "Sodium", "Halogen", "Tube", "-", ""]
@@ -105,12 +98,13 @@ def generate_sample_schnell_iot_data() -> Dict[str, Any]:
     pole_id = 1
     
     base_coords = {
-        "East Zone": (12.9820, 77.6730),
-        "Bommanahalli Zone": (12.9080, 77.6240),
-        "West Zone": (12.9750, 77.5600),
-        "South Zone": (12.9200, 77.5800),
-        "Mahadevapura Zone": (12.9920, 77.6970),
-        "Yelahanka Zone": (13.1000, 77.5960),
+        "Hebbal": (13.0350, 77.5970),
+        "PulakeshiNagar": (13.0100, 77.6100),
+        "CVRamanNagar": (12.9850, 77.6600),
+        "SarvagnaNagar": (13.0150, 77.6400),
+        "ShanthiNagar": (12.9580, 77.5970),
+        "ShivajiNagar": (12.9860, 77.6030),
+        "Bommanahali-Z1": (12.9080, 77.6240),
     }
     
     for region, zones in regions_zones.items():

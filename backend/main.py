@@ -1231,20 +1231,16 @@ LIVE_PENDING_CACHE: Optional[List[Dict[str, Any]]] = None
 LIVE_PENDING_CACHE_TIME: float = 0.0
 LIVE_PENDING_CACHE_TTL_SECONDS = 300
 LIVE_PENDING_CACHE_LOCK = Lock()
-_INITIAL_CACHE_EVENT = threading.Event()
 _IS_REFRESHING_LIVE_DATA = False
 
 
 def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any]]:
-    """Return live pending poles with a non-blocking thread-safe cache.
+    """Return live pending poles.
 
-    If cache is cold on boot, wait up to 15s for the initial background load.
-    Once ready, normal HTTP user requests return the live cache instantly (< 0.001s).
+    HTTP requests NEVER block (< 0.001s). Heavy network dataset builds run
+    exclusively in the background.
     """
     global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_TIME, _IS_REFRESHING_LIVE_DATA
-
-    if not force_refresh and LIVE_PENDING_CACHE is None:
-        _INITIAL_CACHE_EVENT.wait(timeout=15.0)
 
     if not force_refresh:
         if LIVE_PENDING_CACHE is not None:
@@ -1266,10 +1262,9 @@ def _get_live_pending_records(force_refresh: bool = False) -> List[Dict[str, Any
 
             LIVE_PENDING_CACHE = refreshed
             LIVE_PENDING_CACHE_TIME = refreshed_time
-            _INITIAL_CACHE_EVENT.set()
             return refreshed
         except Exception as exc:
-            print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Using existing data.", file=sys.stderr)
+            print(f"[LIVE REFRESH WARNING] Upstream live fetch failed ({exc}). Retaining current data.", file=sys.stderr)
             return LIVE_PENDING_CACHE or PENDING_POLES_DATA
         finally:
             _IS_REFRESHING_LIVE_DATA = False
