@@ -66,7 +66,11 @@ app = FastAPI(
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent
-POLE_IMAGES_DIR = BASE_DIR / "pole_images"
+if os.environ.get("VERCEL"):
+    POLE_IMAGES_DIR = Path("/tmp/pole_images")
+else:
+    POLE_IMAGES_DIR = BASE_DIR / "pole_images"
+
 POLE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 # Images are exposed through the backend only after successful upload.
