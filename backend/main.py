@@ -126,7 +126,7 @@ GOOGLE_SHEET_NAME = os.getenv(
 
 _google_services = None
 _google_services_lock = Lock()
-
+SCOPES = ['https://www.googleapis.com/auth/drive', 'https://www.googleapis.com/auth/spreadsheets']
 
 def _resolve_google_credentials_path() -> Path:
     """
