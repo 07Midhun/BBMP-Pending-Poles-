@@ -5,49 +5,79 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/pole_model.dart';
+import 'database_service.dart';
 
 class ApiService {
-  /// Live backend deployed on Render.
+  /// Currently active backend URL.
   ///
-  /// This URL is used by the Android mobile app and Flutter Web app.
+  /// For testing on your physical Android phone, the local computer IP
+  /// is used first.
+  ///
+  /// Your phone successfully reached:
+  /// http://10.18.72.47:8000/
   static String activeBaseUrl =
-      'https://bbmp-pending-poles-6.onrender.com/';
+      'http://10.46.23.63:8000/api/v1';
 
   /// Backend URLs tried by the application.
   ///
-  /// The live Render backend is always tried first.
-  /// Local URLs are kept only for local development.
+  /// Order:
+  /// 1. Local backend on your computer.
+  /// 2. Render production backend.
+  /// 3. Web local development URL when running Flutter Web.
   static List<String> get _candidateUrls {
-    return [
-      // Production backend.
+    final urls = <String>[
+      // Wi-Fi IP address
+      'http://10.46.23.63:8000/api/v1',
+      // Ethernet IP addresses
+      'http://192.168.3.149:8000/api/v1',
+      'http://10.18.72.179:8000/api/v1',
+      // Android Emulator localhost alias
+      'http://10.0.2.2:8000/api/v1',
+      // ADB reverse tcp (USB connected physical device)
+      'http://127.0.0.1:8000/api/v1',
+
+      // Render production backend - Render 2.
       'https://bbmp-pending-poles-2.onrender.com/api/v1',
 
-      // Local development fallbacks.
-      if (kIsWeb) ...[
-        if (Uri.base.host.isNotEmpty)
-          'http://${Uri.base.host}:8000/api/v1',
-        'http://localhost:8000/api/v1',
-        'http://127.0.0.1:8000/api/v1',
-      ] else ...[
-        // Android emulator.
-        'http://10.0.2.2:8000/api/v1',
-
-        // Local computer IP address.
-        'http://10.150.197.63:8000/api/v1',
-
-        // Android physical-device fallback.
-        'http://localhost:8000/api/v1',
-      ],
+      // Production Render backend.
+      'https://bbmp-pending-poles-6.onrender.com/api/v1',
     ];
+
+    if (kIsWeb) {
+      final webHost = Uri.base.host.trim();
+
+      if (webHost.isNotEmpty &&
+          webHost != 'localhost' &&
+          webHost != '127.0.0.1') {
+        urls.add('http://$webHost:8000/api/v1');
+      }
+
+      urls.add('http://localhost:8000/api/v1');
+      urls.add('http://127.0.0.1:8000/api/v1');
+    }
+
+    return urls;
   }
 
-  /// Checks whether the backend root endpoint is reachable.
+  /// Removes the API path and trailing slash from a backend URL.
   ///
-  /// The FastAPI backend exposes GET /.
-  /// Therefore, /api/v1 is removed before checking the root endpoint.
+  /// Example:
+  /// http://192.168.9.244:8000/api/v1
+  /// becomes:
+  /// http://10.18.72.47:8000
+  static String _rootUrl(String url) {
+    return url
+        .replaceFirst(RegExp(r'/api/v1/?$'), '')
+        .replaceFirst(RegExp(r'/$'), '');
+  }
+
+  /// Checks whether any backend URL is reachable.
+  ///
+  /// The FastAPI backend exposes:
+  /// GET /
   static Future<bool> checkHealth() async {
     for (final url in _candidateUrls) {
-      final rootUrl = url.replaceFirst('/api/v1', '');
+      final rootUrl = _rootUrl(url);
 
       try {
         debugPrint('Checking backend: $rootUrl');
@@ -57,26 +87,30 @@ class ApiService {
             .timeout(const Duration(seconds: 10));
 
         debugPrint(
-          'Backend response: ${response.statusCode} ${response.body}',
+          'Backend response: '
+          '${response.statusCode} ${response.body}',
         );
 
         if (response.statusCode == 200) {
           activeBaseUrl = url;
 
           debugPrint(
-            'Backend connected successfully using: $activeBaseUrl',
+            'Backend connected successfully using: '
+            '$activeBaseUrl',
           );
 
           return true;
         }
       } catch (error) {
         debugPrint(
-          'Backend connection failed for $rootUrl: $error',
+          'Backend connection failed for '
+          '$rootUrl: $error',
         );
       }
     }
 
     debugPrint('Unable to connect to any backend URL.');
+
     return false;
   }
 
@@ -107,7 +141,8 @@ class ApiService {
           .timeout(const Duration(seconds: 15));
 
       debugPrint(
-        'Regions response: ${response.statusCode} ${response.body}',
+        'Regions response: '
+        '${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode == 200) {
@@ -146,7 +181,8 @@ class ApiService {
           .timeout(const Duration(seconds: 15));
 
       debugPrint(
-        'Zones response: ${response.statusCode} ${response.body}',
+        'Zones response: '
+        '${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode == 200) {
@@ -198,12 +234,16 @@ class ApiService {
           .timeout(const Duration(seconds: 45));
 
       debugPrint(
-        'Wards response: ${response.statusCode} ${response.body}',
+        'Wards response: '
+        '${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode != 200) {
         throw Exception(
-          _serverError(response, 'Unable to load wards'),
+          _serverError(
+            response,
+            'Unable to load wards',
+          ),
         );
       }
 
@@ -226,7 +266,9 @@ class ApiService {
             .toList();
       }
 
-      throw Exception('Invalid wards response from backend');
+      throw Exception(
+        'Invalid wards response from backend',
+      );
     } catch (error) {
       debugPrint('Error fetching wards: $error');
       rethrow;
@@ -260,7 +302,9 @@ class ApiService {
       queryParameters: query,
     );
 
-    debugPrint('Fetching dynamic lamp types from: $uri');
+    debugPrint(
+      'Fetching dynamic lamp types from: $uri',
+    );
 
     try {
       final response = await http
@@ -268,12 +312,16 @@ class ApiService {
           .timeout(const Duration(seconds: 60));
 
       debugPrint(
-        'Lamp types response: ${response.statusCode} ${response.body}',
+        'Lamp types response: '
+        '${response.statusCode} ${response.body}',
       );
 
       if (response.statusCode != 200) {
         throw Exception(
-          _serverError(response, 'Unable to load lamp types'),
+          _serverError(
+            response,
+            'Unable to load lamp types',
+          ),
         );
       }
 
@@ -292,7 +340,9 @@ class ApiService {
           .toSet()
           .toList();
     } catch (error) {
-      debugPrint('Error fetching lamp types: $error');
+      debugPrint(
+        'Error fetching lamp types: $error',
+      );
       rethrow;
     }
   }
@@ -305,9 +355,13 @@ class ApiService {
     String? poleOldLamp,
     String? lampType,
   }) async {
-    final uri = Uri.parse('$activeBaseUrl/poles/filter');
+    final uri = Uri.parse(
+      '$activeBaseUrl/poles/filter',
+    );
 
-    debugPrint('Filtering pending poles using: $uri');
+    debugPrint(
+      'Filtering pending poles using: $uri',
+    );
 
     try {
       final response = await http
@@ -349,7 +403,7 @@ class ApiService {
         );
       }
 
-      return (data['poles'] as List)
+      final poles = (data['poles'] as List)
           .whereType<Map>()
           .map(
             (item) => Pole.fromJson(
@@ -357,8 +411,31 @@ class ApiService {
             ),
           )
           .toList();
+          
+      // Cache poles for offline use
+      await DatabaseService.instance.cachePoles(poles);
+      return poles;
     } catch (error) {
-      debugPrint('Error filtering pending poles: $error');
+      debugPrint(
+        'Error filtering pending poles: $error. Falling back to local cache.',
+      );
+      
+      try {
+        final cached = await DatabaseService.instance.getCachedPoles(
+          region: region,
+          zone: zone,
+          ward: ward,
+          poleOldLamp: poleOldLamp,
+          lampType: lampType,
+        );
+        if (cached.isNotEmpty) {
+          debugPrint('Successfully loaded ${cached.length} poles from local cache.');
+          return cached;
+        }
+      } catch (cacheError) {
+        debugPrint('Cache fallback failed: $cacheError');
+      }
+
       rethrow;
     }
   }
@@ -376,7 +453,9 @@ class ApiService {
       '$activeBaseUrl/poles/calculate-distance',
     );
 
-    debugPrint('Calculating distances using: $uri');
+    debugPrint(
+      'Calculating distances using: $uri',
+    );
 
     try {
       final response = await http
@@ -428,7 +507,9 @@ class ApiService {
           )
           .toList();
     } catch (error) {
-      debugPrint('Error calculating distances: $error');
+      debugPrint(
+        'Error calculating distances: $error',
+      );
       rethrow;
     }
   }
@@ -449,7 +530,9 @@ class ApiService {
         '$activeBaseUrl/schnell-iot/pole/$encodedPoleNumber',
       );
 
-      debugPrint('Fetching IoT pole from: $uri');
+      debugPrint(
+        'Fetching IoT pole from: $uri',
+      );
 
       final response = await http
           .get(uri)
@@ -472,7 +555,9 @@ class ApiService {
         }
       }
     } catch (error) {
-      debugPrint('Error fetching IoT pole: $error');
+      debugPrint(
+        'Error fetching IoT pole: $error',
+      );
     }
 
     return null;
@@ -481,7 +566,6 @@ class ApiService {
   /// Looks up multiple poles in Schnell IoT / ThingsBoard.
   ///
   /// The returned map is keyed by pole number.
-  /// Each value contains the backend's live IoT result.
   static Future<Map<String, Map<String, dynamic>>>
       fetchSchnellIoTPoles(
     List<String> poleNumbers,
@@ -495,7 +579,9 @@ class ApiService {
         '$activeBaseUrl/schnell-iot/poles',
       );
 
-      debugPrint('Fetching multiple IoT poles from: $uri');
+      debugPrint(
+        'Fetching multiple IoT poles from: $uri',
+      );
 
       final response = await http
           .post(
@@ -539,12 +625,16 @@ class ApiService {
           continue;
         }
 
-        results[poleNumber] = Map<String, dynamic>.from(item);
+        results[poleNumber] = Map<String, dynamic>.from(
+          item,
+        );
       }
 
       return results;
     } catch (error) {
-      debugPrint('Error fetching multiple IoT poles: $error');
+      debugPrint(
+        'Error fetching multiple IoT poles: $error',
+      );
       return {};
     }
   }

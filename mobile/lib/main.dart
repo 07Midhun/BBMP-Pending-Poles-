@@ -1,7 +1,15 @@
 import 'package:flutter/material.dart';
 import 'screens/home_screen.dart';
+import 'services/database_service.dart';
+import 'services/sync_service.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize Database and Sync Manager
+  await DatabaseService.instance.database;
+  SyncService.instance; // Starts listening to network changes
+  
   runApp(const BbmpPendingPolesApp());
 }
 

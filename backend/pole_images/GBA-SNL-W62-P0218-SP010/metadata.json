@@ -10,14 +10,14 @@
       "filename": "image_1.jpg",
       "latitude": 13.0295209,
       "longitude": 77.5786767,
-      "uploaded_at": "2026-09-15T15:58:39.180346+00:00",
+      "uploaded_at": "2026-09-16T11:42:14.702661+00:00",
       "source": "technician_app",
       "google_drive_status": "uploaded",
-      "google_drive_file_id": "1spKL1UNXr8d0emnFxvAnfnndJpQqnOYN",
+      "google_drive_file_id": "1Fst5iWpLMJU04hdmpNhn06hhOA7fO7jM",
       "google_drive_filename": "GBA-SNL-W62-P0218-SP010_image_1.jpg",
-      "google_drive_url": "https://drive.google.com/file/d/1spKL1UNXr8d0emnFxvAnfnndJpQqnOYN/view",
-      "google_sheet_status": "failed",
-      "google_sheet_error": "Pole 'GBA-SNL-W62-P0218-SP010' was not found in worksheet 'Pole Data'. Check that the Pole Number in the sheet exactly matches the pole selected in the app."
+      "google_drive_url": "https://drive.google.com/file/d/1Fst5iWpLMJU04hdmpNhn06hhOA7fO7jM/view",
+      "google_sheet_status": "updated",
+      "google_sheet_error": null
     }
   }
 }

@@ -1,0 +1,13 @@
+In your backend (backend/main.py), these are the endpoints actively connecting to the Schnell IoT platform:
+
+GET /api/v1/schnell-iot/test
+GET /api/v1/schnell-iot/sync-installed-report
+GET /api/v1/schnell-iot/installed-poles-test
+GET /api/v1/schnell-iot/pole-survey-bangalore-test
+GET /api/v1/schnell-iot/pole-survey-test
+GET /api/v1/schnell-iot/live-pending-bangalore-test
+POST /api/v1/schnell-iot/refresh-live-cache
+In your Flutter mobile app (lib/services/api_service.dart), the app requests data from the backend using these paths:
+
+GET .../schnell-iot/pole/{encodedPoleNumber}
+GET .../schnell-iot/poles

@@ -1,4 +1,6 @@
 import os
+import asyncio
+# Reload trigger
 import sys
 import shutil
 import json
@@ -212,28 +214,29 @@ def _get_google_services():
                 "GOOGLE_SHEET_ID is missing from the project-root .env"
             )
 
-        credentials_path = _resolve_google_credentials_path()
+        try:
+            env_creds = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+            if env_creds and env_creds.strip():
+                creds_info = json.loads(env_creds)
+                credentials = service_account.Credentials.from_service_account_info(
+                    creds_info, scopes=SCOPES
+                )
+                print("[GOOGLE] Loaded credentials from environment variable.")
+            else:
+                credentials_path = _resolve_google_credentials_path()
+                if not credentials_path.exists():
+                    raise FileNotFoundError(f"Credentials file not found at: {credentials_path}")
+                credentials = service_account.Credentials.from_service_account_file(
+                    str(credentials_path),
+                    scopes=SCOPES,
+                )
+                print(f"[GOOGLE] Loaded credentials from file: {credentials_path}")
+        except Exception as e:
+            print(f"ERROR: Failed to load Google credentials: {e}", file=sys.stderr)
+            return None
 
-        print(
-            "[GOOGLE] Service-account file:",
-            credentials_path,
-        )
-        print(
-            "[GOOGLE] Drive folder ID:",
-            GOOGLE_DRIVE_FOLDER_ID,
-        )
-        print(
-            "[GOOGLE] Sheet ID configured:",
-            bool(GOOGLE_SHEET_ID),
-        )
-
-        credentials = service_account.Credentials.from_service_account_file(
-            str(credentials_path),
-            scopes=[
-                "https://www.googleapis.com/auth/drive",
-                "https://www.googleapis.com/auth/spreadsheets",
-            ],
-        )
+        print("[GOOGLE] Drive folder ID:", GOOGLE_DRIVE_FOLDER_ID)
+        print("[GOOGLE] Sheet ID configured:", bool(GOOGLE_SHEET_ID))
 
         drive_service = build(
             "drive",
@@ -1754,7 +1757,7 @@ def get_lamp_types(
     })
 
     if pol_cls == "Empty":
-        lamp_types = ["-"] if records else []
+        lamp_types = ["-", "Blank"] if records else []
 
     return {
         "region": region,
@@ -3104,10 +3107,14 @@ def _classify_live_pole_lamp(lamp_profiles: Any) -> tuple[str, str]:
     profiles = _parse_lamp_profiles(lamp_profiles)
 
     lamp_types: List[str] = []
+    has_blank = False
+    
     for profile in profiles:
         raw_type = str(profile.get("type") or "").strip()
         normalized = _normalize_live_lamp_type(raw_type)
         if normalized in _EMPTY_LAMP_MARKERS:
+            if normalized != "-":
+                has_blank = True
             continue
         canonical = _canonical_lamp_type(raw_type)
         if canonical and canonical != "-":
@@ -3116,6 +3123,8 @@ def _classify_live_pole_lamp(lamp_profiles: Any) -> tuple[str, str]:
             lamp_types.append(canonical)
 
     if not lamp_types:
+        if has_blank:
+            return "Empty", "Blank"
         return "Empty", "-"
 
     normalized_types = {_normalize_live_lamp_type(t) for t in lamp_types}

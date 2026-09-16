@@ -9,6 +9,8 @@ import 'package:http_parser/http_parser.dart';
 
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
+import '../services/sync_service.dart';
+import '../utils/debouncer.dart';
 
 class _ImageFormat {
   final String extension;
@@ -30,6 +32,7 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _zoneLoadError;
   String? _loadingIoTPole;
   bool _loadingPoles = false;
+  String? _poleLoadError;
   int _selectionGeneration = 0;
   int _distanceRequestId = 0;
   int _lampTypeRequestId = 0;
@@ -143,6 +146,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = false;
+      _poleLoadError = null;
     });
 
     if (newRegion == null || !_isBackendOnline) {
@@ -173,7 +177,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (zones.isEmpty) {
         try {
           final uri = Uri.parse(
-            'http://192.168.3.149:8000/api/v1/zones'
+            'http://192.168.9.244:8000/api/v1/zones'
             '?region=${Uri.encodeQueryComponent(regionForRequest)}',
           );
           final response = await http.get(uri).timeout(
@@ -247,6 +251,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = false;
+      _poleLoadError = null;
     });
 
     if (newZone == null ||
@@ -298,6 +303,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = newWard != null;
+      _poleLoadError = null;
     });
 
     if (newWard == null) {
@@ -332,6 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = newOldLamp != null;
+      _poleLoadError = null;
     });
 
     if (newOldLamp == null) {
@@ -390,9 +397,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      setState(() { _poleLoadError = e.toString(); });
+      /* ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to load pending poles: $e')),
-      );
+      ); */
     }
 
     // Lamp-type options are loaded independently. A failure here must not
@@ -448,6 +456,7 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = true;
+      _poleLoadError = null;
     });
 
     if (newLampType == null) {
@@ -509,9 +518,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      setState(() { _poleLoadError = e.toString(); });
+      /* ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to apply lamp type filter: $e')),
-      );
+      ); */
     }
   }
 
@@ -646,11 +656,14 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
 
-    controller.dispose();
-
     if (selected != null && mounted) {
       await _onStartingPoleChanged(selected);
     }
+    
+    // Delay dispose to prevent _dependents.isEmpty crash while dialog animates out
+    Future.delayed(const Duration(milliseconds: 500), () {
+      controller.dispose();
+    });
   }
 
   Future<void> _applyFilters({required int generation}) async {
@@ -710,9 +723,10 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      setState(() { _poleLoadError = e.toString(); });
+      /* ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to load pending poles: $e')),
-      );
+      ); */
     }
   }
 
@@ -928,11 +942,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Image $slot uploaded for ${pole.poleNumber}')),
+          SnackBar(content: Text('Image $slot uploaded to cloud for ${pole.poleNumber}')),
         );
       }
     } catch (e) {
-      _imageErrors[key] = e.toString().replaceFirst('Exception: ', '');
+      debugPrint('Cloud upload failed, saving locally: $e');
+      try {
+        await SyncService.instance.saveImageLocally(image.path, pole.poleNumber, slot);
+        _uploadedImageUrls[key] = 'local://pending';
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Image $slot saved locally (will sync when online)')),
+          );
+        }
+      } catch (localError) {
+        _imageErrors[key] = 'Local save failed: $localError';
+      }
     } finally {
       if (mounted) {
         setState(() {
@@ -1810,7 +1835,28 @@ class _HomeScreenState extends State<HomeScreen> {
       return _buildInstructionState(
         icon: Icons.sync,
         message:
-            'Loading live pending poles from Schnell IoTâ€¦\nPlease wait.',
+            'Loading live pending poles from Schnell IoT...\nPlease wait.',
+      );
+    }
+
+    if (_poleLoadError != null) {
+      return Column(
+        children: [
+          _buildInstructionState(
+            icon: Icons.error_outline,
+            message: 'Unable to load pending poles.\n\n$_poleLoadError',
+          ),
+          const SizedBox(height: 16),
+          ElevatedButton.icon(
+            onPressed: () => _applyFilters(generation: _selectionGeneration),
+            icon: const Icon(Icons.refresh),
+            label: const Text('Retry'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF38BDF8),
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
       );
     }
 
