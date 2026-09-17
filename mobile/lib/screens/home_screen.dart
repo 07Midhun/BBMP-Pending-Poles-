@@ -1188,47 +1188,66 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              IconButton(
-                tooltip: 'Take photo',
-                icon: const Icon(
-                  Icons.camera_alt_outlined,
-                  color: Color(0xFF38BDF8),
-                ),
-                onPressed: uploading
-                    ? null
-                    : () async {
-                        final picked = await _imagePicker.pickImage(
-                          source: ImageSource.camera,
-                          imageQuality: 85,
-                        );
-                        if (picked != null) onImageChanged(picked);
-                      },
-              ),
-              IconButton(
-                tooltip: 'Choose from gallery',
-                icon: const Icon(
-                  Icons.photo_library_outlined,
-                  color: Color(0xFF94A3B8),
-                ),
-                onPressed: uploading
-                    ? null
-                    : () async {
-                        final picked = await _imagePicker.pickImage(
-                          source: ImageSource.gallery,
-                          imageQuality: 85,
-                        );
-                        if (picked != null) onImageChanged(picked);
-                      },
-              ),
-              if (image != null)
-                IconButton(
-                  tooltip: 'Remove',
-                  icon: const Icon(
-                    Icons.delete_outline,
-                    color: Color(0xFFF43F5E),
+              if (pole.uploadedSlots.contains(slot))
+                const Padding(
+                  padding: EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Color(0xFF10B981), size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Completed',
+                        style: TextStyle(
+                          color: Color(0xFF10B981),
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
                   ),
-                  onPressed: uploading ? null : () => onImageChanged(null),
+                )
+              else ...[
+                IconButton(
+                  tooltip: 'Take photo',
+                  icon: const Icon(
+                    Icons.camera_alt_outlined,
+                    color: Color(0xFF38BDF8),
+                  ),
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          final picked = await _imagePicker.pickImage(
+                            source: ImageSource.camera,
+                            imageQuality: 85,
+                          );
+                          if (picked != null) onImageChanged(picked);
+                        },
                 ),
+                IconButton(
+                  tooltip: 'Choose from gallery',
+                  icon: const Icon(
+                    Icons.photo_library_outlined,
+                    color: Color(0xFF94A3B8),
+                  ),
+                  onPressed: uploading
+                      ? null
+                      : () async {
+                          final picked = await _imagePicker.pickImage(
+                            source: ImageSource.gallery,
+                            imageQuality: 85,
+                          );
+                          if (picked != null) onImageChanged(picked);
+                        },
+                ),
+                if (image != null)
+                  IconButton(
+                    tooltip: 'Remove',
+                    icon: const Icon(
+                      Icons.delete_outline,
+                      color: Color(0xFFF43F5E),
+                    ),
+                    onPressed: uploading ? null : () => onImageChanged(null),
+                  ),
+              ],
             ],
           ),
           if (image != null) ...[
@@ -2195,7 +2214,7 @@ class _HomeScreenState extends State<HomeScreen> {
                       child: Align(
                         alignment: Alignment.center,
                         child: InkWell(
-                          onTap: pole.hasImages ? null : () => _showPoleImages(pole),
+                          onTap: pole.uploadedSlots.length >= 3 ? null : () => _showPoleImages(pole),
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -2206,12 +2225,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: const Color(0xFF0F172A),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: pole.hasImages ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                                color: pole.uploadedSlots.length >= 3 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
                               ),
                             ),
                             child: Icon(
-                              pole.hasImages ? Icons.check_circle : Icons.camera_alt_outlined,
-                              color: pole.hasImages ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                              pole.uploadedSlots.length >= 3 ? Icons.check_circle : Icons.camera_alt_outlined,
+                              color: pole.uploadedSlots.length >= 3 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
                               size: 16,
                             ),
                           ),

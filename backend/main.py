@@ -461,10 +461,10 @@ def _normalise_sheet_pole(value: Any) -> str:
     return text
 
 
-def _fetch_completed_poles_from_sheet() -> set[str]:
+def _fetch_completed_poles_from_sheet() -> dict[str, list[int]]:
     """
-    Read the Google Sheet to find all poles that already have images.
-    Returns a set of normalized pole numbers.
+    Read the Google Sheet to find exactly which image slots are filled for each pole.
+    Returns a dictionary mapping pole_number -> list of uploaded slot numbers (e.g., [1, 2]).
     """
     _, sheets_service = _get_google_services()
     
@@ -478,23 +478,26 @@ def _fetch_completed_poles_from_sheet() -> set[str]:
         
         rows = result.get("values", [])
         if not rows:
-            return set()
+            return {}
 
         headers = rows[0]
         pole_col_idx = -1
-        image_col_indices = []
+        image_cols = {} # mapping slot_number (int) -> column_index
 
         for col_idx, header_val in enumerate(headers):
             normalized = _normalise_sheet_header(header_val)
             if normalized in ("polenumber", "poleno", "pole"):
                 pole_col_idx = col_idx
             elif normalized.startswith("image") or normalized.startswith("pic"):
-                image_col_indices.append(col_idx)
+                match = re.search(r'\d+', normalized)
+                if match:
+                    slot = int(match.group(0))
+                    image_cols[slot] = col_idx
 
-        if pole_col_idx == -1 or not image_col_indices:
-            return set()
+        if pole_col_idx == -1 or not image_cols:
+            return {}
 
-        completed_poles = set()
+        completed_poles: dict[str, list[int]] = {}
         for row in rows[1:]:
             if len(row) <= pole_col_idx:
                 continue
@@ -503,21 +506,19 @@ def _fetch_completed_poles_from_sheet() -> set[str]:
             if not pole_val:
                 continue
                 
-            # Check if any image column has a value
-            has_image = False
-            for img_idx in image_col_indices:
+            uploaded_slots = []
+            for slot, img_idx in image_cols.items():
                 if len(row) > img_idx and str(row[img_idx]).strip():
-                    has_image = True
-                    break
+                    uploaded_slots.append(slot)
                     
-            if has_image:
-                completed_poles.add(_normalise_sheet_pole(pole_val))
+            if uploaded_slots:
+                completed_poles[_normalise_sheet_pole(pole_val)] = uploaded_slots
 
         return completed_poles
 
     except Exception as exc:
         print(f"[GOOGLE SHEETS] Failed to fetch completed poles: {exc}")
-        return set()
+        return {}
 
 def _update_sheet_image_link(
     pole_number: str,
@@ -1938,8 +1939,8 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
         record["ward"] = str(record.get("ward") or "").strip()
         record["pole_old_lamp"] = pole_old_lamp
         record["lamp_type"] = lamp_type
-        # Add has_images flag based on Google Sheet data
-        record["has_images"] = (pole_number in completed_poles)
+        # Add uploaded_slots array based on Google Sheet data
+        record["uploaded_slots"] = completed_poles.get(pole_number, [])
         
         pending_poles.append(record)
 
