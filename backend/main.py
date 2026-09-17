@@ -819,6 +819,7 @@ class FilterRequest(BaseModel):
     ward: Optional[str] = None
     pole_old_lamp: Optional[str] = None
     lamp_type: Optional[str] = None
+    force_refresh: bool = False
 
 
 class DistanceRequest(BaseModel):
@@ -2064,7 +2065,7 @@ def filter_poles(
 
     # Production path: use live ThingsBoard data. Do not silently fall back
     # to the old sample dataset if the live service is unavailable.
-    results = _get_live_pending_records().copy()
+    results = _get_live_pending_records(force_refresh=req.force_refresh).copy()
 
     if req.region:
         wanted_region = _normalize_filter_text(_normalize_region(req.region))

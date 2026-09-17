@@ -72,7 +72,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _initDataAndCheckBackend();
   }
 
-  Future<void> _initDataAndCheckBackend() async {
+  Future<void> _initDataAndCheckBackend({bool forceRefresh = false}) async {
     final online = await ApiService.checkHealth();
 
     if (!mounted) return;
@@ -82,6 +82,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     await _loadRegions();
+
+    if (forceRefresh) {
+      await _applyFilters(generation: _selectionGeneration, forceRefresh: true);
+    }
   }
 
   Future<void> _loadRegions() async {
@@ -665,7 +669,7 @@ class _HomeScreenState extends State<HomeScreen> {
     });
   }
 
-  Future<void> _applyFilters({required int generation}) async {
+  Future<void> _applyFilters({required int generation, bool forceRefresh = false}) async {
     if (!mounted || generation != _selectionGeneration) return;
 
     if (!_isBackendOnline) {
@@ -694,6 +698,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ward: ward,
         poleOldLamp: poleOldLamp,
         lampType: lampType,
+        forceRefresh: forceRefresh,
       );
 
       if (!mounted || generation != _selectionGeneration) return;
@@ -1479,7 +1484,7 @@ class _HomeScreenState extends State<HomeScreen> {
               Icons.refresh,
               color: Color(0xFF38BDF8),
             ),
-            onPressed: _initDataAndCheckBackend,
+            onPressed: () => _initDataAndCheckBackend(forceRefresh: true),
           ),
         ],
       ),

@@ -341,13 +341,14 @@ class ApiService {
     String? ward,
     String? poleOldLamp,
     String? lampType,
+    bool forceRefresh = false,
   }) async {
     final uri = Uri.parse(
       '$activeBaseUrl/poles/filter',
     );
 
     debugPrint(
-      'Filtering pending poles using: $uri',
+      'Filtering pending poles using: $uri (forceRefresh: $forceRefresh)',
     );
 
     try {
@@ -363,6 +364,7 @@ class ApiService {
               'ward': ward,
               'pole_old_lamp': poleOldLamp,
               'lamp_type': lampType,
+              'force_refresh': forceRefresh,
             }),
           )
           .timeout(const Duration(seconds: 120));
