@@ -8,6 +8,7 @@ class Pole {
   final String lampType;
   final double latitude;
   final double longitude;
+  final bool hasImages;
 
   double? distanceMeters;
   int? order;
@@ -22,6 +23,7 @@ class Pole {
     required this.lampType,
     required this.latitude,
     required this.longitude,
+    this.hasImages = false,
     this.distanceMeters,
     this.order,
   });
@@ -38,6 +40,7 @@ class Pole {
     String? lampType,
     double? latitude,
     double? longitude,
+    bool? hasImages,
     double? distanceMeters,
     int? order,
   }) {
@@ -51,6 +54,7 @@ class Pole {
       lampType: lampType ?? this.lampType,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      hasImages: hasImages ?? this.hasImages,
       distanceMeters: distanceMeters ?? this.distanceMeters,
       order: order ?? this.order,
     );
@@ -67,6 +71,7 @@ class Pole {
       'lamp_type': lampType,
       'latitude': latitude,
       'longitude': longitude,
+      'has_images': hasImages,
       'distance_meters': distanceMeters,
       'order': order,
     };
@@ -89,6 +94,7 @@ class Pole {
           '',
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
+      hasImages: json['has_images'] == true || json['hasImages'] == true,
       distanceMeters: json['distance_meters'] != null
           ? _toDouble(json['distance_meters'])
           : null,

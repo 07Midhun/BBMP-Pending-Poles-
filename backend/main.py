@@ -300,19 +300,50 @@ def _drive_upload_image(
     """Upload or replace the exact pole/slot image in the configured folder."""
     drive_service, _ = _get_google_services()
 
+    # 1. Find or create the pole sub-folder
+    pole_folder_name = _safe_pole_folder_name(pole_number)
+    folder_query = (
+        f"mimeType = 'application/vnd.google-apps.folder' "
+        f"and name = '{pole_folder_name}' "
+        f"and '{GOOGLE_DRIVE_FOLDER_ID}' in parents "
+        f"and trashed = false"
+    )
+    
+    existing_folders = drive_service.files().list(
+        q=folder_query,
+        spaces="drive",
+        corpora="user",
+        includeItemsFromAllDrives=True,
+        supportsAllDrives=True,
+        fields="files(id,name)",
+    ).execute().get("files", [])
+
+    if existing_folders:
+        pole_drive_folder_id = existing_folders[0]["id"]
+    else:
+        created_folder = drive_service.files().create(
+            body={
+                "name": pole_folder_name,
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [GOOGLE_DRIVE_FOLDER_ID],
+            },
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+        pole_drive_folder_id = created_folder["id"]
+
     extension = Path(filename).suffix.lower()
     safe_name = (
-        f"{_safe_pole_folder_name(pole_number)}"
+        f"{pole_folder_name}"
         f"_image_{image_slot}"
         f"{extension}"
     )
 
-    # Find an existing image for this exact pole/slot so repeated uploads do
-    # not create endless duplicates.
+    # 2. Upload image inside the pole sub-folder
     escaped_name = safe_name.replace("'", "\\'")
     query = (
         f"name = '{escaped_name}' "
-        f"and '{GOOGLE_DRIVE_FOLDER_ID}' in parents "
+        f"and '{pole_drive_folder_id}' in parents "
         "and trashed = false"
     )
 
@@ -335,63 +366,47 @@ def _drive_upload_image(
     files_found = existing.get("files", [])
 
     if files_found:
-        # Update the first matching file instead of creating a duplicate.
         file_id = files_found[0]["id"]
-
         print(
             "[GOOGLE DRIVE] Replacing existing file:",
             safe_name,
             "|",
             file_id,
         )
-
         updated = drive_service.files().update(
             fileId=file_id,
             media_body=media,
             fields="id,name,webViewLink,webContentLink,parents",
             supportsAllDrives=True,
         ).execute()
-
     else:
         print(
             "[GOOGLE DRIVE] Uploading:",
             safe_name,
             "to folder:",
-            GOOGLE_DRIVE_FOLDER_ID,
+            pole_drive_folder_id,
         )
-
         updated = drive_service.files().create(
             body={
                 "name": safe_name,
-                "parents": [GOOGLE_DRIVE_FOLDER_ID],
+                "parents": [pole_drive_folder_id],
             },
             media_body=media,
             fields="id,name,webViewLink,webContentLink,parents",
             supportsAllDrives=True,
         ).execute()
-
         file_id = updated["id"]
 
-    # Public permissions are optional. Shared Drives may prohibit this.
-    # The file itself is still successfully stored in Drive.
     try:
         drive_service.permissions().create(
             fileId=file_id,
-            body={
-                "type": "anyone",
-                "role": "reader",
-            },
+            body={"type": "anyone", "role": "reader"},
             fields="id",
             supportsAllDrives=True,
         ).execute()
     except Exception as permission_error:
-        print(
-            "[GOOGLE DRIVE] Public-link permission not available:",
-            permission_error,
-        )
+        print("[GOOGLE DRIVE] Public-link permission not available:", permission_error)
 
-    # Read the file back from Drive. This is an intentional verification step:
-    # the API will not report "uploaded" unless Drive confirms the file exists.
     verified = drive_service.files().get(
         fileId=file_id,
         fields="id,name,parents,mimeType,size,webViewLink,webContentLink",
@@ -399,10 +414,10 @@ def _drive_upload_image(
     ).execute()
 
     parents = verified.get("parents", [])
-    if GOOGLE_DRIVE_FOLDER_ID not in parents:
+    if pole_drive_folder_id not in parents:
         raise RuntimeError(
             "Drive upload verification failed: uploaded file is not inside "
-            f"the configured folder {GOOGLE_DRIVE_FOLDER_ID}."
+            f"the configured folder {pole_drive_folder_id}."
         )
 
     print(
@@ -445,6 +460,64 @@ def _normalise_sheet_pole(value: Any) -> str:
     text = text.replace(" ", "")
     return text
 
+
+def _fetch_completed_poles_from_sheet() -> set[str]:
+    """
+    Read the Google Sheet to find all poles that already have images.
+    Returns a set of normalized pole numbers.
+    """
+    _, sheets_service = _get_google_services()
+    
+    try:
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range=f"'{GOOGLE_SHEET_NAME}'!A:ZZ",
+            majorDimension="ROWS",
+            valueRenderOption="FORMATTED_VALUE",
+        ).execute()
+        
+        rows = result.get("values", [])
+        if not rows:
+            return set()
+
+        headers = rows[0]
+        pole_col_idx = -1
+        image_col_indices = []
+
+        for col_idx, header_val in enumerate(headers):
+            normalized = _normalise_sheet_header(header_val)
+            if normalized in ("polenumber", "poleno", "pole"):
+                pole_col_idx = col_idx
+            elif normalized.startswith("image") or normalized.startswith("pic"):
+                image_col_indices.append(col_idx)
+
+        if pole_col_idx == -1 or not image_col_indices:
+            return set()
+
+        completed_poles = set()
+        for row in rows[1:]:
+            if len(row) <= pole_col_idx:
+                continue
+                
+            pole_val = row[pole_col_idx]
+            if not pole_val:
+                continue
+                
+            # Check if any image column has a value
+            has_image = False
+            for img_idx in image_col_indices:
+                if len(row) > img_idx and str(row[img_idx]).strip():
+                    has_image = True
+                    break
+                    
+            if has_image:
+                completed_poles.add(_normalise_sheet_pole(pole_val))
+
+        return completed_poles
+
+    except Exception as exc:
+        print(f"[GOOGLE SHEETS] Failed to fetch completed poles: {exc}")
+        return set()
 
 def _update_sheet_image_link(
     pole_number: str,
@@ -1821,10 +1894,11 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
     """Build a complete live pending dataset without mutating the cache.
 
     Pole Survey and Lamp Installation are independent ThingsBoard queries,
+    and we also check Google Sheets for completed image uploads,
     so fetch them concurrently rather than waiting for one full dataset
     before starting the other.
     """
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         survey_future = executor.submit(
             _fetch_all_bangalore_pole_survey_records,
             token,
@@ -1833,9 +1907,13 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
             _fetch_all_bangalore_installed_records,
             token,
         )
+        completed_future = executor.submit(
+            _fetch_completed_poles_from_sheet,
+        )
 
         survey_records = survey_future.result()
         installed_records = installed_future.result()
+        completed_poles = completed_future.result()
 
     installed_poles = {
         _normalize_pole_number(record.get("pole_id"))
@@ -1846,6 +1924,7 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
     pending_poles: List[Dict[str, Any]] = []
     for pole in survey_records:
         pole_number = _normalize_pole_number(pole.get("pole_number"))
+        # Exclude poles that are fully installed in the IoT platform
         if not pole_number or pole_number in installed_poles:
             continue
 
@@ -1859,6 +1938,9 @@ def _build_live_pending_records(token: str) -> List[Dict[str, Any]]:
         record["ward"] = str(record.get("ward") or "").strip()
         record["pole_old_lamp"] = pole_old_lamp
         record["lamp_type"] = lamp_type
+        # Add has_images flag based on Google Sheet data
+        record["has_images"] = (pole_number in completed_poles)
+        
         pending_poles.append(record)
 
     return pending_poles

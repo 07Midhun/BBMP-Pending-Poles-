@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'screens/home_screen.dart';
+import 'screens/login_screen.dart';
 import 'services/database_service.dart';
 import 'services/sync_service.dart';
 
@@ -34,7 +36,7 @@ class BbmpPendingPolesApp extends StatelessWidget {
         ),
         useMaterial3: true,
       ),
-      home: const HomeScreen(),
+      home: const LoginScreen(),
     );
   }
 }

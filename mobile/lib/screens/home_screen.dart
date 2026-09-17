@@ -10,7 +10,6 @@ import 'package:http_parser/http_parser.dart';
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
 import '../services/sync_service.dart';
-import '../utils/debouncer.dart';
 
 class _ImageFormat {
   final String extension;
@@ -971,31 +970,63 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _showPoleImages(Pole pole) async {
     final images = <int, XFile>{};
 
-    await showDialog<void>(
+    await showModalBottomSheet<void>(
       context: context,
-      builder: (dialogContext) {
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (bottomSheetContext) {
         return StatefulBuilder(
-          builder: (context, setDialogState) {
-            return AlertDialog(
-              backgroundColor: const Color(0xFF1E293B),
-              title: const Text(
-                'Pole Images',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+          builder: (context, setSheetState) {
+            final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
+            return Container(
+              margin: const EdgeInsets.only(top: 60),
+              decoration: const BoxDecoration(
+                color: Color(0xFF1E293B),
+                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black54,
+                    blurRadius: 10,
+                    offset: Offset(0, -2),
+                  ),
+                ],
               ),
-              content: SizedBox(
-                width: 560,
-                child: SingleChildScrollView(
+              child: SafeArea(
+                bottom: false,
+                child: Padding(
+                  padding: EdgeInsets.only(
+                    left: 20,
+                    right: 20,
+                    bottom: bottomPadding + 20,
+                    top: 12,
+                  ),
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      Container(
+                        width: 40,
+                        height: 4,
+                        margin: const EdgeInsets.only(bottom: 20),
+                        decoration: BoxDecoration(
+                          color: Colors.white24,
+                          borderRadius: BorderRadius.circular(2),
+                        ),
+                      ),
+                      const Text(
+                        'Pole Images',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       Text(
                         pole.poleNumber,
                         style: const TextStyle(
                           color: Color(0xFF38BDF8),
                           fontWeight: FontWeight.w600,
+                          fontSize: 16,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -1003,62 +1034,88 @@ class _HomeScreenState extends State<HomeScreen> {
                         '${pole.latitude}, ${pole.longitude}',
                         style: const TextStyle(
                           color: Color(0xFF94A3B8),
-                          fontSize: 12,
+                          fontSize: 13,
                         ),
                       ),
-                      const SizedBox(height: 16),
-                      for (int slot = 1; slot <= 3; slot++)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: _buildImageSlot(
-                            context: context,
-                            pole: pole,
-                            slot: slot,
-                            image: images[slot],
-                            uploading: _uploadingImages[
-                                    _imageKey(pole.poleNumber, slot)] ??
-                                false,
-                            uploadedUrl: _uploadedImageUrls[
-                                _imageKey(pole.poleNumber, slot)],
-                            error: _imageErrors[
-                                _imageKey(pole.poleNumber, slot)],
-                            onImageChanged: (image) {
-                              if (image == null) {
-                                images.remove(slot);
-                              } else {
-                                images[slot] = image;
-                              }
-                              setDialogState(() {});
-                            },
-                            onUpload: (image) async {
-                              await _uploadPoleImage(
-                                pole: pole,
-                                slot: slot,
-                                image: image,
-                                refreshDialog: () => setDialogState(() {}),
-                              );
-                            },
+                      const SizedBox(height: 24),
+                      Flexible(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              for (int slot = 1; slot <= 3; slot++)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 16),
+                                  child: _buildImageSlot(
+                                    context: context,
+                                    pole: pole,
+                                    slot: slot,
+                                    image: images[slot],
+                                    uploading: _uploadingImages[
+                                            _imageKey(pole.poleNumber, slot)] ??
+                                        false,
+                                    uploadedUrl: _uploadedImageUrls[
+                                        _imageKey(pole.poleNumber, slot)],
+                                    error: _imageErrors[
+                                        _imageKey(pole.poleNumber, slot)],
+                                    onImageChanged: (image) {
+                                      if (image == null) {
+                                        images.remove(slot);
+                                      } else {
+                                        images[slot] = image;
+                                      }
+                                      setSheetState(() {});
+                                    },
+                                    onUpload: (image) async {
+                                      await _uploadPoleImage(
+                                        pole: pole,
+                                        slot: slot,
+                                        image: image,
+                                        refreshDialog: () =>
+                                            setSheetState(() {}),
+                                      );
+                                    },
+                                  ),
+                                ),
+                              const SizedBox(height: 8),
+                              const Text(
+                                'Images are securely synced to your Google Drive.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Color(0xFF64748B),
+                                  fontSize: 12,
+                                ),
+                              ),
+                              const SizedBox(height: 16),
+                            ],
                           ),
                         ),
-                      const SizedBox(height: 4),
-                      const Text(
-                        'Images are uploaded to the backend and linked to this exact pole number.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(
-                          color: Color(0xFF64748B),
-                          fontSize: 11,
+                      ),
+                      SizedBox(
+                        width: double.infinity,
+                        child: TextButton(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                            backgroundColor: Colors.white.withOpacity(0.05),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                          ),
+                          onPressed: () => Navigator.of(bottomSheetContext).pop(),
+                          child: const Text(
+                            'Close',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(dialogContext).pop(),
-                  child: const Text('Close'),
-                ),
-              ],
             );
           },
         );
@@ -1193,21 +1250,29 @@ class _HomeScreenState extends State<HomeScreen> {
           ],
           if (uploadedUrl != null) ...[
             const SizedBox(height: 5),
-            const Row(
+            Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Icon(
-                  Icons.check_circle,
-                  color: Color(0xFF10B981),
-                  size: 15,
+                  uploadedUrl == 'local://pending'
+                      ? Icons.schedule
+                      : Icons.check_circle,
+                  color: uploadedUrl == 'local://pending'
+                      ? const Color(0xFFF59E0B) // amber/orange
+                      : const Color(0xFF10B981), // green
+                  size: 16,
                 ),
-                SizedBox(width: 5),
+                const SizedBox(width: 4),
                 Text(
-                  'Uploaded successfully',
+                  uploadedUrl == 'local://pending'
+                      ? 'Queued for Sync'
+                      : 'Uploaded to Cloud',
                   style: TextStyle(
-                    color: Color(0xFF10B981),
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
+                    color: uploadedUrl == 'local://pending'
+                        ? const Color(0xFFF59E0B)
+                        : const Color(0xFF10B981),
+                    fontSize: 12,
+                    fontWeight: FontWeight.w500,
                   ),
                 ),
               ],
@@ -1786,42 +1851,51 @@ class _HomeScreenState extends State<HomeScreen> {
         mainAxisAlignment:
             MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.pin_drop,
-                color: Color(0xFF38BDF8),
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Filtered Pending Poles: ${_filteredPoles.length}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
+          Expanded(
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.pin_drop,
+                  color: Color(0xFF38BDF8),
+                  size: 18,
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Filtered Pending Poles: ${_filteredPoles.length}',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 14,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+              ],
+            ),
           ),
           if (_selectedStartingPole != null)
-            Container(
-              padding:
-                  const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 4,
-              ),
-              decoration: BoxDecoration(
-                color: const Color(0xFF0369A1),
-                borderRadius:
-                    BorderRadius.circular(20),
-              ),
-              child: Text(
-                'Start: $_selectedStartingPole',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 12,
-                  fontWeight: FontWeight.bold,
+            Flexible(
+              child: Container(
+                margin: const EdgeInsets.only(left: 8),
+                padding:
+                    const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 4,
+                ),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0369A1),
+                  borderRadius:
+                      BorderRadius.circular(20),
+                ),
+                child: Text(
+                  'Start: $_selectedStartingPole',
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  overflow: TextOverflow.ellipsis,
                 ),
               ),
             ),
@@ -1925,49 +1999,49 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 4,
                   child: Text(
                     'POLE NO.',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight:
                           FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'DISTANCE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 11,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    'IMAGES',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: AlignmentTextRight(
-                    'LOCATION',
+                    'DIST',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight:
                           FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 1,
+                  child: Text(
+                    'PICS',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 11,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: AlignmentTextRight(
+                    'MAP',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight:
+                          FontWeight.bold,
+                      fontSize: 11,
                     ),
                   ),
                 ),
@@ -2027,47 +2101,49 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Pole Number
                     Expanded(
-                      flex: 3,
+                      flex: 4,
                       child: Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          InkWell(
-                            onTap: () => _showIoTPoleDetails(pole),
-                            borderRadius: BorderRadius.circular(4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    pole.poleNumber,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 14,
+                          Expanded(
+                            child: InkWell(
+                              onTap: () => _showIoTPoleDetails(pole),
+                              borderRadius: BorderRadius.circular(4),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      pole.poleNumber,
+                                      style: const TextStyle(
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w600,
+                                        fontSize: 11,
+                                      ),
                                     ),
                                   ),
-                                ),
-                                const SizedBox(width: 5),
-                                if (_loadingIoTPole == pole.poleNumber)
-                                  const SizedBox(
-                                    width: 12,
-                                    height: 12,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
+                                  const SizedBox(width: 4),
+                                  if (_loadingIoTPole == pole.poleNumber)
+                                    const SizedBox(
+                                      width: 12,
+                                      height: 12,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  else
+                                    const Icon(
+                                      Icons.bolt,
+                                      color: Color(0xFF10B981),
+                                      size: 14,
                                     ),
-                                  )
-                                else
-                                  const Icon(
-                                    Icons.bolt,
-                                    color: Color(0xFF10B981),
-                                    size: 14,
-                                  ),
-                              ],
+                                ],
+                              ),
                             ),
                           ),
                           if (isStartingPole) ...[
                             const SizedBox(
-                              width: 4,
+                              width: 2,
                             ),
                             const Icon(
                               Icons.star,
@@ -2082,12 +2158,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Distance
                     Expanded(
-                      flex: 3,
+                      flex: 2,
                       child: Container(
                         padding:
                             const EdgeInsets
                                 .symmetric(
-                          horizontal: 8,
+                          horizontal: 4,
                           vertical: 3,
                         ),
                         alignment:
@@ -2115,11 +2191,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Technician Images
                     Expanded(
-                      flex: 2,
+                      flex: 1,
                       child: Align(
                         alignment: Alignment.center,
                         child: InkWell(
-                          onTap: () => _showPoleImages(pole),
+                          onTap: pole.hasImages ? null : () => _showPoleImages(pole),
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -2130,12 +2206,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: const Color(0xFF0F172A),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: const Color(0xFF38BDF8),
+                                color: pole.hasImages ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
                               ),
                             ),
-                            child: const Icon(
-                              Icons.camera_alt_outlined,
-                              color: Color(0xFF38BDF8),
+                            child: Icon(
+                              pole.hasImages ? Icons.check_circle : Icons.camera_alt_outlined,
+                              color: pole.hasImages ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
                               size: 16,
                             ),
                           ),
@@ -2145,7 +2221,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Google Maps
                     Expanded(
-                      flex: 3,
+                      flex: 2,
                       child: Align(
                         alignment:
                             Alignment.centerRight,
@@ -2186,7 +2262,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   MainAxisSize.min,
                               children: [
                                 Text(
-                                  'ðŸ“',
+                                  '📍',
                                   style:
                                       TextStyle(
                                     fontSize: 12,

@@ -24,23 +24,10 @@ class ApiService {
   /// 1. Local backend on your computer.
   /// 2. Render production backend.
   /// 3. Web local development URL when running Flutter Web.
-  static List<String> get _candidateUrls {
+    static List<String> get _candidateUrls {
     final urls = <String>[
-      // Wi-Fi IP address
-      'http://10.46.23.63:8000/api/v1',
-      // Ethernet IP addresses
-      'http://192.168.3.149:8000/api/v1',
-      'http://10.18.72.179:8000/api/v1',
-      // Android Emulator localhost alias
-      'http://10.0.2.2:8000/api/v1',
-      // ADB reverse tcp (USB connected physical device)
-      'http://127.0.0.1:8000/api/v1',
-
-      // Render production backend - Render 2.
-      'https://bbmp-pending-poles-2.onrender.com/api/v1',
-
-      // Production Render backend.
-      'https://bbmp-pending-poles-6.onrender.com/api/v1',
+      // Production Vercel backend.
+      'https://bbmp-pending-poles-jljy.vercel.app/api/v1',
     ];
 
     if (kIsWeb) {
