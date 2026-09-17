@@ -936,6 +936,9 @@ class _HomeScreenState extends State<HomeScreen> {
         final decoded = jsonDecode(responseBody);
         if (decoded is Map && decoded['image_url'] != null) {
           _uploadedImageUrls[key] = decoded['image_url'].toString();
+          if (!pole.uploadedSlots.contains(slot)) {
+            pole.uploadedSlots.add(slot);
+          }
         }
       } catch (_) {}
 
@@ -949,6 +952,9 @@ class _HomeScreenState extends State<HomeScreen> {
       try {
         await SyncService.instance.saveImageLocally(image.path, pole.poleNumber, slot);
         _uploadedImageUrls[key] = 'local://pending';
+        if (!pole.uploadedSlots.contains(slot)) {
+          pole.uploadedSlots.add(slot);
+        }
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(content: Text('Image $slot saved locally (will sync when online)')),
@@ -1189,16 +1195,20 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
               if (pole.uploadedSlots.contains(slot))
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 16),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
                   child: Row(
                     children: [
-                      Icon(Icons.check_circle, color: Color(0xFF10B981), size: 20),
-                      SizedBox(width: 8),
+                      Icon(
+                        uploadedUrl == 'local://pending' ? Icons.schedule : Icons.check_circle,
+                        color: uploadedUrl == 'local://pending' ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
+                        size: 20,
+                      ),
+                      const SizedBox(width: 8),
                       Text(
-                        'Completed',
+                        uploadedUrl == 'local://pending' ? 'Queued' : 'Completed',
                         style: TextStyle(
-                          color: Color(0xFF10B981),
+                          color: uploadedUrl == 'local://pending' ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
                           fontWeight: FontWeight.bold,
                         ),
                       ),
@@ -1250,7 +1260,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ],
           ),
-          if (image != null) ...[
+          if (image != null && !pole.uploadedSlots.contains(slot)) ...[
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
@@ -1265,36 +1275,6 @@ class _HomeScreenState extends State<HomeScreen> {
                     : const Icon(Icons.cloud_upload_outlined, size: 17),
                 label: Text(uploading ? 'Uploading...' : 'Save Image $slot'),
               ),
-            ),
-          ],
-          if (uploadedUrl != null) ...[
-            const SizedBox(height: 5),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Icon(
-                  uploadedUrl == 'local://pending'
-                      ? Icons.schedule
-                      : Icons.check_circle,
-                  color: uploadedUrl == 'local://pending'
-                      ? const Color(0xFFF59E0B) // amber/orange
-                      : const Color(0xFF10B981), // green
-                  size: 16,
-                ),
-                const SizedBox(width: 4),
-                Text(
-                  uploadedUrl == 'local://pending'
-                      ? 'Queued for Sync'
-                      : 'Uploaded to Cloud',
-                  style: TextStyle(
-                    color: uploadedUrl == 'local://pending'
-                        ? const Color(0xFFF59E0B)
-                        : const Color(0xFF10B981),
-                    fontSize: 12,
-                    fontWeight: FontWeight.w500,
-                  ),
-                ),
-              ],
             ),
           ],
           if (error != null) ...[

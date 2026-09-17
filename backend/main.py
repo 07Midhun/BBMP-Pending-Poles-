@@ -3542,6 +3542,20 @@ async def upload_pole_image(
 
     _write_image_metadata(pole_folder, metadata)
 
+    # Invalidate/Update the backend cache immediately so other users 
+    # (and the current user if they refresh) get the completed status instantly.
+    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_LOCK
+    if LIVE_PENDING_CACHE is not None:
+        with LIVE_PENDING_CACHE_LOCK:
+            for record in LIVE_PENDING_CACHE:
+                if record.get("pole_number") == normalized_pole:
+                    slots = record.get("uploaded_slots", [])
+                    if image_slot not in slots:
+                        # Create a new list to avoid mutating in place if it's shared incorrectly,
+                        # though modifying the list is fine in Python.
+                        record["uploaded_slots"] = slots + [image_slot]
+                    break
+
     return {
         "status": "success",
         "message": f"Image {image_slot} saved for {normalized_pole}.",
