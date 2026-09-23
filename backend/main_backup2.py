@@ -1101,7 +1101,10 @@ def get_lamp_types(
             detail="Invalid Pole With Old Lamp classification",
         )
 
-    # Use exactly the same live pending dataset as /poles/filter.
+    # IMPORTANT: Every classification, including LED, must be derived from
+    # the live records after applying Region -> Zone -> Ward filters.
+    # Do not return a fixed list for LED, otherwise all four LED options are
+    # shown even when only one or two exist in the selected area.
     records = _get_live_pending_records().copy()
 
     if region:
@@ -1128,7 +1131,7 @@ def get_lamp_types(
     records = [p for p in records if _matches_pole_old_lamp(p, pol_cls)]
 
     lamp_types = sorted({
-        _canonical_lamp_type(p.get("lamp_type"))
+        _compact_lamp_type(_canonical_lamp_type(p.get("lamp_type")))
         for p in records
         if _canonical_lamp_type(p.get("lamp_type"))
     })
@@ -1246,7 +1249,7 @@ def _normalize_filter_lamp_type(value: Optional[str]) -> Optional[str]:
     raw = str(value).strip()
     if not raw:
         return None
-    return _canonical_lamp_type(raw)
+    return _compact_lamp_type(_canonical_lamp_type(raw))
 
 
 def _normalize_filter_text(value: Any) -> str:
@@ -2364,6 +2367,24 @@ def _normalize_live_lamp_type(value: Any) -> str:
     return str(value or "").strip().upper().replace(" ", "")
 
 
+def _compact_lamp_type(value: Any) -> str:
+    """Collapse duplicated comma-separated lamp labels for dropdown/filter use."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+
+    parts = [part.strip() for part in raw.split(",") if part.strip()]
+    if not parts:
+        return raw
+
+    # Keep meaningful LED combinations such as LED,LED and LED,FL LED.
+    normalized = [part.upper().replace(" ", "") for part in parts]
+    if all(item == normalized[0] for item in normalized):
+        return parts[0]
+
+    return ",".join(parts)
+
+
 def _canonical_lamp_type(value: Any) -> str:
     """Return the exact lamp-type labels used by the mobile application.
 
@@ -2386,6 +2407,8 @@ def _canonical_lamp_type(value: Any) -> str:
         return "LED,LED"
     if normalized in {"FLED", "FLLED", "FL-LED", "FL_LED"}:
         return "FL LED"
+    if normalized in {"FL", "FLOODLIGHT", "FLOOD-LIGHT", "FLOOD_LIGHT"}:
+        return "FL"
     if normalized == "LED":
         return "LED"
 
@@ -2401,7 +2424,7 @@ def _canonical_lamp_type(value: Any) -> str:
                 canonical_parts.append("LED")
             else:
                 canonical_parts.append(part.strip())
-        return ",".join(canonical_parts)
+        return _compact_lamp_type(",".join(canonical_parts))
 
     return raw
 

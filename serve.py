@@ -36,12 +36,12 @@ def main():
     web_dir = find_web_dir()
     
     print("\n" + "=" * 65)
-    print("  🚀 BBMP PENDING POLES — SCHNELL IOT WEB APPLICATION")
+    print("  BBMP PENDING POLES - SCHNELL IOT WEB APPLICATION")
     print("=" * 65)
-    print(f"  👉 Clickable Local Link   : http://localhost:{port}")
-    print(f"  👉 Clickable Loopback Link: http://127.0.0.1:{port}")
-    print(f"  👉 Mobile Network Link   : http://{host_ip}:{port}")
-    print(f"  ⚡ Backend API Docs       : http://localhost:8000/docs")
+    print(f"  * Clickable Local Link   : http://localhost:{port}")
+    print(f"  * Clickable Loopback Link: http://127.0.0.1:{port}")
+    print(f"  * Mobile Network Link   : http://{host_ip}:{port}")
+    print(f"  * Backend API Docs       : http://localhost:8000/docs")
     print("=" * 65)
     print(f"  Serving Directory        : {web_dir}\n")
 
