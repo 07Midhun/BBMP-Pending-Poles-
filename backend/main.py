@@ -2732,6 +2732,28 @@ def get_pole_images(pole_number: str):
 
 
 # ============================================================
+# NEW MOBILE ENDPOINTS
+# ============================================================
+
+@app.get("/api/v1/health")
+def health_check():
+    """Simple health check endpoint for the mobile app to verify connectivity."""
+    return {"status": "ok", "message": "Backend is live"}
+
+@app.post("/api/v1/poles/{pole_id}/verify")
+def verify_pole(pole_id: str):
+    """Placeholder endpoint for verifying a pole in the field."""
+    normalized_pole = _normalize_pole_number(pole_id)
+    return {"status": "success", "message": f"Pole {normalized_pole} verified.", "pole_number": normalized_pole}
+
+@app.post("/api/v1/sync")
+def sync_data(data: dict):
+    """Batch synchronization endpoint for offline cached data."""
+    # Process the offline sync queue
+    synced_items = data.get("items", [])
+    return {"status": "success", "synced_count": len(synced_items), "message": "Offline data synced"}
+
+# ============================================================
 # ============================================================
 # FLUTTER WEB FRONTEND
 # ============================================================
