@@ -66,5 +66,16 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>Camera access is required to capture photos of BBMP pending poles.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Photo library access is required to select images of BBMP pending poles.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location access is required to locate nearby BBMP pending poles.</string>
+	<key>NSAppTransportSecurity</key>
+	<dict>
+		<key>NSAllowsArbitraryLoads</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

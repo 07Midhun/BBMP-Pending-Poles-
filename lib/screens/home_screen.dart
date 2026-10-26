@@ -3,12 +3,15 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
+import '../services/database_service.dart';
+import 'login_screen.dart';
 
 class _ImageFormat {
   final String extension;
@@ -40,6 +43,7 @@ class _HomeScreenState extends State<HomeScreen> {
   final Map<String, bool> _uploadingImages = {};
   final Map<String, String> _uploadedImageUrls = {};
   final Map<String, String> _imageErrors = {};
+  DateTime? _lastHistoryRefreshTime;
 
   // Selected Filter States
   String? _selectedRegion;
@@ -70,7 +74,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _initDataAndCheckBackend();
   }
 
-  Future<void> _initDataAndCheckBackend() async {
+  Future<void> _initDataAndCheckBackend({bool forceRefresh = false}) async {
     final online = await ApiService.checkHealth();
 
     if (!mounted) return;
@@ -80,6 +84,10 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     await _loadRegions();
+
+    if (forceRefresh) {
+      await _applyFilters(generation: _selectionGeneration, forceRefresh: true);
+    }
   }
 
   Future<void> _loadRegions() async {
@@ -173,7 +181,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (zones.isEmpty) {
         try {
           final uri = Uri.parse(
-            'http://192.168.3.149:8000/api/v1/zones'
+            '${ApiService.activeBaseUrl}/zones'
             '?region=${Uri.encodeQueryComponent(regionForRequest)}',
           );
           final response = await http.get(uri).timeout(
@@ -653,7 +661,7 @@ class _HomeScreenState extends State<HomeScreen> {
     }
   }
 
-  Future<void> _applyFilters({required int generation}) async {
+  Future<void> _applyFilters({required int generation, bool forceRefresh = false}) async {
     if (!mounted || generation != _selectionGeneration) return;
 
     if (!_isBackendOnline) {
@@ -699,6 +707,13 @@ class _HomeScreenState extends State<HomeScreen> {
           _selectedStartingPole = null;
         }
       });
+
+      if (_selectedStartingPole != null) {
+        await _calculateDistances(
+          requestId: ++_distanceRequestId,
+          generation: generation,
+        );
+      }
     } catch (e) {
       if (!mounted || generation != _selectionGeneration) return;
 
@@ -923,10 +938,50 @@ class _HomeScreenState extends State<HomeScreen> {
         final decoded = jsonDecode(responseBody);
         if (decoded is Map && decoded['image_url'] != null) {
           _uploadedImageUrls[key] = decoded['image_url'].toString();
+        } else {
+          _uploadedImageUrls[key] = 'uploaded';
         }
-      } catch (_) {}
+      } catch (_) {
+        _uploadedImageUrls[key] = 'uploaded';
+      }
+
+      if (!pole.uploadedSlots.contains(slot)) {
+        pole.uploadedSlots.add(slot);
+      }
+
+      // Record in local database + SharedPreferences backup history
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        final savedUser = prefs.getString('saved_username') ?? 'Technician';
+        final now = DateTime.now();
+        final timestamp = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')} ${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}';
+
+        await DatabaseService.instance.recordUploadHistory(
+          username: savedUser,
+          poleNumber: pole.poleNumber,
+          ward: pole.ward,
+          imageSlot: slot,
+          timestamp: timestamp,
+          imagePath: image.path,
+        );
+
+        final spList = prefs.getStringList('sp_upload_history') ?? [];
+        final itemJson = jsonEncode({
+          'username': savedUser,
+          'pole_number': pole.poleNumber,
+          'ward': pole.ward,
+          'image_slot': slot,
+          'timestamp': timestamp,
+          'image_path': image.path,
+        });
+        spList.insert(0, itemJson);
+        await prefs.setStringList('sp_upload_history', spList);
+      } catch (dbErr) {
+        debugPrint('Failed to log upload history: $dbErr');
+      }
 
       if (mounted) {
+        setState(() {});
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('Image $slot uploaded for ${pole.poleNumber}')),
         );
@@ -945,6 +1000,22 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _showPoleImages(Pole pole) async {
     final images = <int, XFile>{};
+
+    // Pre-populate uploaded slots from DatabaseService and Pole object
+    final dbSlots = await DatabaseService.instance.getUploadedSlotsForPole(pole.poleNumber);
+    for (final s in dbSlots) {
+      if (!pole.uploadedSlots.contains(s)) {
+        pole.uploadedSlots.add(s);
+      }
+      _uploadedImageUrls[_imageKey(pole.poleNumber, s)] = 'uploaded';
+    }
+    for (final s in pole.uploadedSlots) {
+      _uploadedImageUrls[_imageKey(pole.poleNumber, s)] = 'uploaded';
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
 
     await showDialog<void>(
       context: context,
@@ -1385,12 +1456,20 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            tooltip: 'Profile & Account',
+            icon: const Icon(
+              Icons.account_circle_outlined,
+              color: Color(0xFF38BDF8),
+            ),
+            onPressed: _showProfileMenu,
+          ),
+          IconButton(
             tooltip: 'Refresh Connection',
             icon: const Icon(
               Icons.refresh,
               color: Color(0xFF38BDF8),
             ),
-            onPressed: _initDataAndCheckBackend,
+            onPressed: () => _initDataAndCheckBackend(forceRefresh: true),
           ),
         ],
       ),
@@ -1746,53 +1825,56 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildResultsSummaryBar() {
     return Container(
       padding: const EdgeInsets.symmetric(
-        horizontal: 16,
-        vertical: 12,
+        horizontal: 14,
+        vertical: 10,
       ),
       decoration: BoxDecoration(
         color: const Color(0xFF0F172A),
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
-          color:
-              const Color(0xFF38BDF8).withOpacity(0.4),
+          color: const Color(0xFF38BDF8).withOpacity(0.4),
         ),
       ),
       child: Row(
-        mainAxisAlignment:
-            MainAxisAlignment.spaceBetween,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          Row(
-            children: [
-              const Icon(
-                Icons.pin_drop,
-                color: Color(0xFF38BDF8),
-                size: 18,
-              ),
-              const SizedBox(width: 8),
-              Text(
-                'Filtered Pending Poles: ${_filteredPoles.length}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 14,
+          Expanded(
+            child: Row(
+              children: [
+                const Icon(
+                  Icons.pin_drop,
+                  color: Color(0xFF38BDF8),
+                  size: 18,
                 ),
-              ),
-            ],
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Filtered Pending Poles: ${_filteredPoles.length}',
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+              ],
+            ),
           ),
-          if (_selectedStartingPole != null)
+          if (_selectedStartingPole != null) ...[
+            const SizedBox(width: 8),
             Container(
-              padding:
-                  const EdgeInsets.symmetric(
+              padding: const EdgeInsets.symmetric(
                 horizontal: 10,
                 vertical: 4,
               ),
               decoration: BoxDecoration(
                 color: const Color(0xFF0369A1),
-                borderRadius:
-                    BorderRadius.circular(20),
+                borderRadius: BorderRadius.circular(20),
               ),
               child: Text(
-                'Start: $_selectedStartingPole',
+                'Start: ${_selectedStartingPole!.length > 14 ? "${_selectedStartingPole!.substring(0, 14)}..." : _selectedStartingPole}',
+                overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
                   color: Colors.white,
                   fontSize: 12,
@@ -1800,6 +1882,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               ),
             ),
+          ],
         ],
       ),
     );
@@ -1830,13 +1913,7 @@ class _HomeScreenState extends State<HomeScreen> {
       );
     }
 
-    if (_selectedStartingPole == null) {
-      return _buildInstructionState(
-        icon: Icons.near_me,
-        message:
-            'Select a Starting Pole above to calculate distance-based ordering.',
-      );
-    }
+    final displayPoles = _orderedPoles.isNotEmpty ? _orderedPoles : _filteredPoles;
 
     return Container(
       decoration: BoxDecoration(
@@ -1847,15 +1924,13 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
       child: Column(
-        crossAxisAlignment:
-            CrossAxisAlignment.stretch,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           // Table Header
           Container(
-            padding:
-                const EdgeInsets.symmetric(
-              horizontal: 12,
-              vertical: 12,
+            padding: const EdgeInsets.symmetric(
+              horizontal: 6,
+              vertical: 10,
             ),
             decoration: const BoxDecoration(
               color: Color(0xFF334155),
@@ -1867,61 +1942,57 @@ class _HomeScreenState extends State<HomeScreen> {
             child: const Row(
               children: [
                 SizedBox(
-                  width: 36,
+                  width: 18,
                   child: Text(
                     '#',
                     style: TextStyle(
                       color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
+                  flex: 7,
                   child: Text(
                     'POLE NO.',
                     style: TextStyle(
                       color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 13,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'DISTANCE',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    'IMAGES',
+                    'DIST',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 13,
+                      fontSize: 12,
                     ),
                   ),
                 ),
                 Expanded(
-                  flex: 3,
-                  child: AlignmentTextRight(
-                    'LOCATION',
+                  flex: 2,
+                  child: Text(
+                    'PICS',
                     style: TextStyle(
                       color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: AlignmentTextRight(
+                    'MAP',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
                     ),
                   ),
                 ),
@@ -1933,141 +2004,122 @@ class _HomeScreenState extends State<HomeScreen> {
           SizedBox(
             height: 520,
             child: ListView.separated(
-            itemCount: _orderedPoles.length,
-            separatorBuilder:
-                (context, index) =>
-                    const Divider(
-              height: 1,
-              color: Color(0xFF334155),
-            ),
-            itemBuilder:
-                (context, index) {
-              final pole =
-                  _orderedPoles[index];
+              itemCount: displayPoles.length,
+              separatorBuilder: (context, index) => const Divider(
+                height: 1,
+                color: Color(0xFF334155),
+              ),
+              itemBuilder: (context, index) {
+                final pole = displayPoles[index];
 
               final isStartingPole =
                   pole.poleNumber ==
                       _selectedStartingPole;
 
+              final hasUploaded = pole.uploadedSlots.isNotEmpty ||
+                  _uploadedImageUrls.keys.any((k) => k.startsWith('${pole.poleNumber}_'));
+
               return Container(
                 padding:
                     const EdgeInsets.symmetric(
-                  horizontal: 12,
-                  vertical: 10,
+                  horizontal: 6,
+                  vertical: 8,
                 ),
                 color: isStartingPole
                     ? const Color(0xFF0284C7)
                         .withOpacity(0.15)
                     : null,
                 child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
                     // Order #
                     SizedBox(
-                      width: 36,
+                      width: 18,
                       child: Text(
                         '${pole.order}',
                         style: TextStyle(
                           color: isStartingPole
-                              ? const Color(
-                                  0xFF38BDF8)
-                              : const Color(
-                                  0xFF94A3B8),
-                          fontWeight:
-                              FontWeight.bold,
-                          fontSize: 13,
+                              ? const Color(0xFF38BDF8)
+                              : const Color(0xFF94A3B8),
+                          fontWeight: FontWeight.bold,
+                          fontSize: 11,
                         ),
                       ),
                     ),
 
-                    // Pole Number
+                    // Pole Number Column
                     Expanded(
-                      flex: 3,
-                      child: Row(
-                        children: [
-                          InkWell(
-                            onTap: () => _showIoTPoleDetails(pole),
-                            borderRadius: BorderRadius.circular(4),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    pole.poleNumber,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(
-                                      color: Colors.white,
-                                      fontWeight: FontWeight.w600,
-                                      fontSize: 14,
-                                    ),
-                                  ),
+                      flex: 7,
+                      child: InkWell(
+                        onTap: () => _showIoTPoleDetails(pole),
+                        borderRadius: BorderRadius.circular(4),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                pole.poleNumber,
+                                overflow: TextOverflow.ellipsis,
+                                maxLines: 1,
+                                style: const TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w600,
+                                  fontSize: 10.5,
+                                  letterSpacing: -0.3,
                                 ),
-                                const SizedBox(width: 5),
-                                if (_loadingIoTPole == pole.poleNumber)
-                                  const SizedBox(
-                                    width: 12,
-                                    height: 12,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                    ),
-                                  )
-                                else
-                                  const Icon(
-                                    Icons.bolt,
-                                    color: Color(0xFF10B981),
-                                    size: 14,
-                                  ),
-                              ],
+                              ),
                             ),
-                          ),
-                          if (isStartingPole) ...[
-                            const SizedBox(
-                              width: 4,
-                            ),
-                            const Icon(
-                              Icons.star,
-                              color:
-                                  Color(0xFFF59E0B),
-                              size: 14,
-                            ),
+                            const SizedBox(width: 2),
+                            if (_loadingIoTPole == pole.poleNumber)
+                              const SizedBox(
+                                width: 10,
+                                height: 10,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 1.5,
+                                ),
+                              )
+                            else
+                              const Icon(
+                                Icons.bolt,
+                                color: Color(0xFF10B981),
+                                size: 12,
+                              ),
+                            if (isStartingPole) ...[
+                              const SizedBox(width: 2),
+                              const Icon(
+                                Icons.star,
+                                color: Color(0xFFF59E0B),
+                                size: 12,
+                              ),
+                            ],
                           ],
-                        ],
+                        ),
                       ),
                     ),
 
-                    // Distance
+                    const SizedBox(width: 4),
+
+                    // Distance Column
                     Expanded(
-                      flex: 3,
-                      child: Container(
-                        padding:
-                            const EdgeInsets
-                                .symmetric(
-                          horizontal: 8,
-                          vertical: 3,
-                        ),
-                        alignment:
-                            Alignment.centerLeft,
-                        child: Text(
-                          pole.distanceFormatted,
-                          style: TextStyle(
-                            color:
-                                pole.distanceMeters ==
-                                        0
-                                    ? const Color(
-                                        0xFF34D399)
-                                    : const Color(
-                                        0xFFE2E8F0),
-                            fontWeight:
-                                pole.distanceMeters ==
-                                        0
-                                    ? FontWeight.bold
-                                    : FontWeight.w500,
-                            fontSize: 13,
-                          ),
+                      flex: 2,
+                      child: Text(
+                        pole.distanceFormatted,
+                        overflow: TextOverflow.ellipsis,
+                        maxLines: 1,
+                        style: TextStyle(
+                          color: pole.distanceMeters == 0
+                              ? const Color(0xFF34D399)
+                              : const Color(0xFFE2E8F0),
+                          fontWeight: pole.distanceMeters == 0
+                              ? FontWeight.bold
+                              : FontWeight.w500,
+                          fontSize: 11,
                         ),
                       ),
                     ),
 
-                    // Technician Images
+                    const SizedBox(width: 4),
+
+                    // Technician Images Column
                     Expanded(
                       flex: 2,
                       child: Align(
@@ -2077,90 +2129,71 @@ class _HomeScreenState extends State<HomeScreen> {
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 8,
-                              vertical: 6,
+                              horizontal: 6,
+                              vertical: 4,
                             ),
                             decoration: BoxDecoration(
-                              color: const Color(0xFF0F172A),
+                              color: hasUploaded
+                                  ? const Color(0xFF064E3B)
+                                  : const Color(0xFF0F172A),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: const Color(0xFF38BDF8),
+                                color: hasUploaded
+                                    ? const Color(0xFF10B981)
+                                    : const Color(0xFF38BDF8),
                               ),
                             ),
-                            child: const Icon(
-                              Icons.camera_alt_outlined,
-                              color: Color(0xFF38BDF8),
-                              size: 16,
+                            child: Icon(
+                              hasUploaded
+                                  ? Icons.check_circle
+                                  : Icons.camera_alt_outlined,
+                              color: hasUploaded
+                                  ? const Color(0xFF10B981)
+                                  : const Color(0xFF38BDF8),
+                              size: 14,
                             ),
                           ),
                         ),
                       ),
                     ),
 
-                    // Google Maps
+                    const SizedBox(width: 4),
+
+                    // Google Maps Column
                     Expanded(
-                      flex: 3,
+                      flex: 2,
                       child: Align(
-                        alignment:
-                            Alignment.centerRight,
+                        alignment: Alignment.centerRight,
                         child: InkWell(
-                          onTap: () =>
-                              _openGoogleMaps(
-                            pole.googleMapsUrl,
-                          ),
-                          borderRadius:
-                              BorderRadius.circular(
-                            6,
-                          ),
+                          onTap: () => _openGoogleMaps(pole.googleMapsUrl),
+                          borderRadius: BorderRadius.circular(6),
                           child: Container(
-                            padding:
-                                const EdgeInsets
-                                    .symmetric(
-                              horizontal: 10,
-                              vertical: 6,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 4,
                             ),
-                            decoration:
-                                BoxDecoration(
-                              color:
-                                  const Color(
-                                0xFF0F172A,
-                              ),
-                              borderRadius:
-                                  BorderRadius
-                                      .circular(6),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF0F172A),
+                              borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color:
-                                    const Color(
-                                  0xFF38BDF8,
-                                ).withOpacity(0.5),
+                                color: const Color(0xFF38BDF8).withOpacity(0.5),
                               ),
                             ),
                             child: const Row(
-                              mainAxisSize:
-                                  MainAxisSize.min,
+                              mainAxisSize: MainAxisSize.min,
                               children: [
-                                Text(
-                                  'ðŸ“',
-                                  style:
-                                      TextStyle(
-                                    fontSize: 12,
-                                  ),
+                                Icon(
+                                  Icons.location_on,
+                                  color: Color(0xFFEF4444),
+                                  size: 13,
                                 ),
-                                SizedBox(
-                                  width: 4,
-                                ),
+                                SizedBox(width: 2),
                                 Text(
                                   'Map',
-                                  style:
-                                      TextStyle(
-                                    color:
-                                        Color(
-                                      0xFF38BDF8,
-                                    ),
-                                    fontWeight:
-                                        FontWeight
-                                            .bold,
-                                    fontSize: 12,
+                                  style: TextStyle(
+                                    color: Color(0xFF38BDF8),
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 11,
                                   ),
                                 ),
                               ],
@@ -2173,11 +2206,11 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
               );
             },
-            ),
           ),
-        ],
-      ),
-    );
+        ),
+      ],
+    ),
+  );
   }
 
   Widget _buildInstructionState({
@@ -2208,6 +2241,437 @@ class _HomeScreenState extends State<HomeScreen> {
               color: Color(0xFF94A3B8),
               fontSize: 14,
               height: 1.4,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> _getCombinedHistory(String username) async {
+    final dbHistory = await DatabaseService.instance.getUploadHistory(username: username);
+    if (dbHistory.isNotEmpty) return dbHistory;
+
+    final prefs = await SharedPreferences.getInstance();
+    final spList = prefs.getStringList('sp_upload_history') ?? [];
+    final List<Map<String, dynamic>> result = [];
+    for (final s in spList) {
+      try {
+        final decoded = jsonDecode(s);
+        if (decoded is Map<String, dynamic>) {
+          result.add(decoded);
+        }
+      } catch (_) {}
+    }
+    return result;
+  }
+
+  void _showProfileMenu() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedUser = prefs.getString('saved_username') ?? 'Technician';
+    var history = await _getCombinedHistory(savedUser);
+    var totalCount = history.length;
+
+    if (!mounted) return;
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: const Color(0xFF0F172A),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.75,
+          minChildSize: 0.4,
+          maxChildSize: 0.95,
+          expand: false,
+          builder: (context, scrollController) {
+            return Container(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                children: [
+                  // Drag Handle
+                  Container(
+                    width: 40,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF475569),
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Profile Header
+                  Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Color(0xFF1E293B),
+                        radius: 28,
+                        child: Icon(Icons.person, color: Color(0xFF38BDF8), size: 32),
+                      ),
+                      const SizedBox(width: 14),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              savedUser.toUpperCase(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 18,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 0.5,
+                              ),
+                            ),
+                            const SizedBox(height: 2),
+                            const Text(
+                              'Technician User Dashboard',
+                              style: TextStyle(
+                                color: Color(0xFF94A3B8),
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Total Images Uploaded Counter Card
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF1E293B),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF38BDF8).withOpacity(0.3)),
+                    ),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        const Row(
+                          children: [
+                            Icon(Icons.photo_library_outlined, color: Color(0xFF10B981), size: 24),
+                            SizedBox(width: 10),
+                            Text(
+                              'Total Images Uploaded:',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF10B981).withOpacity(0.2),
+                            borderRadius: BorderRadius.circular(12),
+                            border: Border.all(color: const Color(0xFF10B981)),
+                          ),
+                          child: Text(
+                            '$totalCount',
+                            style: const TextStyle(
+                              color: Color(0xFF10B981),
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Section Title & Live Refresh Controls
+                  StatefulBuilder(
+                    builder: (context, setDashboardState) {
+                      final secondsAgo = DateTime.now().difference(_lastHistoryRefreshTime ?? DateTime.now()).inSeconds;
+
+                      return Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          const Row(
+                            children: [
+                              Icon(Icons.history, color: Color(0xFF38BDF8), size: 18),
+                              SizedBox(width: 6),
+                              Text(
+                                'Upload History Log',
+                                style: TextStyle(
+                                  color: Color(0xFF38BDF8),
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
+                          ),
+                          Row(
+                            children: [
+                              Text(
+                                'Updated ${secondsAgo}s ago',
+                                style: const TextStyle(
+                                  color: Color(0xFF94A3B8),
+                                  fontSize: 11,
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.refresh, color: Color(0xFF38BDF8), size: 18),
+                                tooltip: 'Refresh History',
+                                onPressed: () async {
+                                  final newHistory = await _getCombinedHistory(savedUser);
+                                  if (mounted) {
+                                    setDashboardState(() {
+                                      history = newHistory;
+                                      totalCount = newHistory.length;
+                                      _lastHistoryRefreshTime = DateTime.now();
+                                    });
+                                  }
+                                },
+                              ),
+                            ],
+                          ),
+                        ],
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 10),
+
+                  // Upload History List / Table
+                  Expanded(
+                    child: history.isEmpty
+                        ? Container(
+                            alignment: Alignment.center,
+                            padding: const EdgeInsets.all(20),
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1E293B),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: const Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.cloud_upload_outlined, color: Color(0xFF64748B), size: 40),
+                                SizedBox(height: 8),
+                                Text(
+                                  'No uploaded images found yet.',
+                                  style: TextStyle(color: Color(0xFF94A3B8), fontSize: 14),
+                                ),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Upload images for poles to populate your history log.',
+                                  style: TextStyle(color: Color(0xFF64748B), fontSize: 12),
+                                  textAlign: TextAlign.center,
+                                ),
+                              ],
+                            ),
+                          )
+                        : Container(
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1E293B),
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(color: const Color(0xFF334155)),
+                            ),
+                            child: ListView.separated(
+                              controller: scrollController,
+                              itemCount: history.length,
+                              separatorBuilder: (_, __) => const Divider(height: 1, color: Color(0xFF334155)),
+                              itemBuilder: (context, index) {
+                                final item = history[index];
+                                final poleNo = item['pole_number'] ?? 'Unknown Pole';
+                                final ward = item['ward'] != null && item['ward'].toString().isNotEmpty
+                                    ? item['ward']
+                                    : 'N/A';
+                                final slot = item['image_slot'] ?? 1;
+                                final timestamp = item['timestamp'] ?? 'N/A';
+
+                                return ListTile(
+                                  dense: true,
+                                  leading: CircleAvatar(
+                                    backgroundColor: const Color(0xFF0284C7).withOpacity(0.2),
+                                    radius: 16,
+                                    child: Text(
+                                      'S$slot',
+                                      style: const TextStyle(
+                                        color: Color(0xFF38BDF8),
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ),
+                                  title: Text(
+                                    poleNo,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                      fontSize: 13,
+                                    ),
+                                  ),
+                                  subtitle: Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF334155),
+                                          borderRadius: BorderRadius.circular(4),
+                                        ),
+                                        child: Text(
+                                          'Ward: $ward',
+                                          style: const TextStyle(
+                                            color: Color(0xFFCBD5E1),
+                                            fontSize: 11,
+                                            fontWeight: FontWeight.w500,
+                                          ),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  trailing: Text(
+                                    timestamp,
+                                    style: const TextStyle(
+                                      color: Color(0xFF94A3B8),
+                                      fontSize: 11,
+                                    ),
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                  ),
+                  const SizedBox(height: 16),
+
+                  // Log Out Button
+                  ElevatedButton.icon(
+                    onPressed: () async {
+                      final navigator = Navigator.of(context);
+                      navigator.pop();
+                      final prefs = await SharedPreferences.getInstance();
+                      await prefs.remove('saved_username');
+                      await prefs.remove('saved_password');
+                      await prefs.remove('login_date');
+                      if (mounted) {
+                        navigator.pushReplacement(
+                          MaterialPageRoute(builder: (_) => const LoginScreen()),
+                        );
+                      }
+                    },
+                    icon: const Icon(Icons.logout, size: 18),
+                    label: const Text('Log Out'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: const Color(0xFFEF4444),
+                      foregroundColor: Colors.white,
+                      minimumSize: const Size(double.infinity, 44),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showHistory() {
+    _showProfileMenu();
+  }
+
+  void _showPoleDetails(Pole pole) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: const Color(0xFF1E293B),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: [
+            const Icon(Icons.info_outline, color: Color(0xFF38BDF8)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                pole.poleNumber,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            _buildDetailRow('Ward', pole.ward),
+            _buildDetailRow('Zone', pole.zone),
+            _buildDetailRow('Old Lamp', pole.poleOldLamp),
+            _buildDetailRow('Lamp Type', pole.lampType),
+            const Divider(color: Color(0xFF334155), height: 32),
+            const Text('Image Status', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 12),
+            _buildImageStatusRow(1, pole),
+            _buildImageStatusRow(2, pole),
+            _buildImageStatusRow(3, pole),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _showIoTPoleDetails(pole);
+            },
+            child: const Text('IoT Details', style: TextStyle(color: Color(0xFF10B981))),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Close', style: TextStyle(color: Color(0xFF38BDF8))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDetailRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 100,
+            child: Text(label, style: const TextStyle(color: Color(0xFF94A3B8), fontSize: 14)),
+          ),
+          Expanded(
+            child: Text(value, style: const TextStyle(color: Colors.white, fontSize: 14, fontWeight: FontWeight.w500)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImageStatusRow(int slot, Pole pole) {
+    final isUploaded = pole.uploadedSlots.contains(slot);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8.0),
+      child: Row(
+        children: [
+          Icon(
+            isUploaded ? Icons.check_circle : Icons.pending_actions,
+            color: isUploaded ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Text(
+            'Image $slot: ',
+            style: const TextStyle(color: Colors.white, fontSize: 14),
+          ),
+          Text(
+            isUploaded ? 'Uploaded' : 'Pending',
+            style: TextStyle(
+              color: isUploaded ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
             ),
           ),
         ],

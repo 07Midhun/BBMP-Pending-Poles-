@@ -9,7 +9,7 @@ import 'package:http_parser/http_parser.dart';
 
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
-import '../services/sync_service.dart';
+import '../features/dashboard/dashboard_screen.dart';
 
 class _ImageFormat {
   final String extension;
@@ -31,9 +31,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String? _zoneLoadError;
   String? _loadingIoTPole;
   bool _loadingPoles = false;
-  String? _poleLoadError;
   int _selectionGeneration = 0;
   int _distanceRequestId = 0;
+  // ignore: unused_field
   int _lampTypeRequestId = 0;
 
   final ImagePicker _imagePicker = ImagePicker();
@@ -60,6 +60,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Latest backend result for the selected Region / Zone / Ward.
   // Lamp classification filters are then applied locally for instant updates.
+  // ignore: unused_field
   List<Pole> _baseFilteredPoles = [];
 
   // Filtered & Distance Ordered Results
@@ -72,7 +73,7 @@ class _HomeScreenState extends State<HomeScreen> {
     _initDataAndCheckBackend();
   }
 
-  Future<void> _initDataAndCheckBackend({bool forceRefresh = false}) async {
+  Future<void> _initDataAndCheckBackend() async {
     final online = await ApiService.checkHealth();
 
     if (!mounted) return;
@@ -82,10 +83,6 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     await _loadRegions();
-
-    if (forceRefresh) {
-      await _applyFilters(generation: _selectionGeneration, forceRefresh: true);
-    }
   }
 
   Future<void> _loadRegions() async {
@@ -149,7 +146,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = false;
-      _poleLoadError = null;
     });
 
     if (newRegion == null || !_isBackendOnline) {
@@ -180,7 +176,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (zones.isEmpty) {
         try {
           final uri = Uri.parse(
-            'http://192.168.9.244:8000/api/v1/zones'
+            '${ApiService.activeBaseUrl}/zones'
             '?region=${Uri.encodeQueryComponent(regionForRequest)}',
           );
           final response = await http.get(uri).timeout(
@@ -254,7 +250,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = false;
-      _poleLoadError = null;
     });
 
     if (newZone == null ||
@@ -306,7 +301,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = newWard != null;
-      _poleLoadError = null;
     });
 
     if (newWard == null) {
@@ -341,7 +335,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = newOldLamp != null;
-      _poleLoadError = null;
     });
 
     if (newOldLamp == null) {
@@ -400,20 +393,19 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      setState(() { _poleLoadError = e.toString(); });
-      /* ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to load pending poles: $e')),
-      ); */
+      );
     }
 
     // Lamp-type options are loaded independently. A failure here must not
     // clear a successful pending-pole result.
     try {
       final types = await ApiService.fetchLampTypes(
-        newOldLamp,
-        region: region,
-        zone: zone,
-        ward: ward,
+        region: _selectedRegion,
+        zone: _selectedZone,
+        ward: _selectedWard,
+        poleOldLamp:newOldLamp,
       );
 
       if (!mounted ||
@@ -459,7 +451,6 @@ class _HomeScreenState extends State<HomeScreen> {
       _filteredPoles = [];
       _orderedPoles = [];
       _loadingPoles = true;
-      _poleLoadError = null;
     });
 
     if (newLampType == null) {
@@ -521,10 +512,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      setState(() { _poleLoadError = e.toString(); });
-      /* ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to apply lamp type filter: $e')),
-      ); */
+      );
     }
   }
 
@@ -659,17 +649,14 @@ class _HomeScreenState extends State<HomeScreen> {
       },
     );
 
+    controller.dispose();
+
     if (selected != null && mounted) {
       await _onStartingPoleChanged(selected);
     }
-    
-    // Delay dispose to prevent _dependents.isEmpty crash while dialog animates out
-    Future.delayed(const Duration(milliseconds: 500), () {
-      controller.dispose();
-    });
   }
 
-  Future<void> _applyFilters({required int generation, bool forceRefresh = false}) async {
+  Future<void> _applyFilters({required int generation}) async {
     if (!mounted || generation != _selectionGeneration) return;
 
     if (!_isBackendOnline) {
@@ -698,7 +685,6 @@ class _HomeScreenState extends State<HomeScreen> {
         ward: ward,
         poleOldLamp: poleOldLamp,
         lampType: lampType,
-        forceRefresh: forceRefresh,
       );
 
       if (!mounted || generation != _selectionGeneration) return;
@@ -727,10 +713,9 @@ class _HomeScreenState extends State<HomeScreen> {
         _loadingPoles = false;
       });
 
-      setState(() { _poleLoadError = e.toString(); });
-      /* ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Unable to load pending poles: $e')),
-      ); */
+      );
     }
   }
 
@@ -878,7 +863,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Future<void> _uploadPoleImage({
     required Pole pole,
     required int slot,
-    required XFile image,
+    required dynamic image,
     required VoidCallback refreshDialog,
   }) async {
     final key = _imageKey(pole.poleNumber, slot);
@@ -941,33 +926,16 @@ class _HomeScreenState extends State<HomeScreen> {
         final decoded = jsonDecode(responseBody);
         if (decoded is Map && decoded['image_url'] != null) {
           _uploadedImageUrls[key] = decoded['image_url'].toString();
-          if (!pole.uploadedSlots.contains(slot)) {
-            pole.uploadedSlots.add(slot);
-          }
         }
       } catch (_) {}
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Image $slot uploaded to cloud for ${pole.poleNumber}')),
+          SnackBar(content: Text('Image $slot uploaded for ${pole.poleNumber}')),
         );
       }
     } catch (e) {
-      debugPrint('Cloud upload failed, saving locally: $e');
-      try {
-        await SyncService.instance.saveImageLocally(image.path, pole.poleNumber, slot);
-        _uploadedImageUrls[key] = 'local://pending';
-        if (!pole.uploadedSlots.contains(slot)) {
-          pole.uploadedSlots.add(slot);
-        }
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Image $slot saved locally (will sync when online)')),
-          );
-        }
-      } catch (localError) {
-        _imageErrors[key] = 'Local save failed: $localError';
-      }
+      _imageErrors[key] = e.toString().replaceFirst('Exception: ', '');
     } finally {
       if (mounted) {
         setState(() {
@@ -979,65 +947,33 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showPoleImages(Pole pole) async {
-    final images = <int, XFile>{};
+    final images = <int, dynamic>{};
 
-    await showModalBottomSheet<void>(
+    await showDialog<void>(
       context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (bottomSheetContext) {
+      builder: (dialogContext) {
         return StatefulBuilder(
-          builder: (context, setSheetState) {
-            final bottomPadding = MediaQuery.of(context).viewInsets.bottom;
-            return Container(
-              margin: const EdgeInsets.only(top: 60),
-              decoration: const BoxDecoration(
-                color: Color(0xFF1E293B),
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black54,
-                    blurRadius: 10,
-                    offset: Offset(0, -2),
-                  ),
-                ],
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              backgroundColor: const Color(0xFF1E293B),
+              title: const Text(
+                'Pole Images',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
-              child: SafeArea(
-                bottom: false,
-                child: Padding(
-                  padding: EdgeInsets.only(
-                    left: 20,
-                    right: 20,
-                    bottom: bottomPadding + 20,
-                    top: 12,
-                  ),
+              content: SizedBox(
+                width: 560,
+                child: SingleChildScrollView(
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Container(
-                        width: 40,
-                        height: 4,
-                        margin: const EdgeInsets.only(bottom: 20),
-                        decoration: BoxDecoration(
-                          color: Colors.white24,
-                          borderRadius: BorderRadius.circular(2),
-                        ),
-                      ),
-                      const Text(
-                        'Pole Images',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                      const SizedBox(height: 8),
                       Text(
                         pole.poleNumber,
                         style: const TextStyle(
                           color: Color(0xFF38BDF8),
                           fontWeight: FontWeight.w600,
-                          fontSize: 16,
                         ),
                       ),
                       const SizedBox(height: 4),
@@ -1045,88 +981,62 @@ class _HomeScreenState extends State<HomeScreen> {
                         '${pole.latitude}, ${pole.longitude}',
                         style: const TextStyle(
                           color: Color(0xFF94A3B8),
-                          fontSize: 13,
+                          fontSize: 12,
                         ),
                       ),
-                      const SizedBox(height: 24),
-                      Flexible(
-                        child: SingleChildScrollView(
-                          child: Column(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              for (int slot = 1; slot <= 3; slot++)
-                                Padding(
-                                  padding: const EdgeInsets.only(bottom: 16),
-                                  child: _buildImageSlot(
-                                    context: context,
-                                    pole: pole,
-                                    slot: slot,
-                                    image: images[slot],
-                                    uploading: _uploadingImages[
-                                            _imageKey(pole.poleNumber, slot)] ??
-                                        false,
-                                    uploadedUrl: _uploadedImageUrls[
-                                        _imageKey(pole.poleNumber, slot)],
-                                    error: _imageErrors[
-                                        _imageKey(pole.poleNumber, slot)],
-                                    onImageChanged: (image) {
-                                      if (image == null) {
-                                        images.remove(slot);
-                                      } else {
-                                        images[slot] = image;
-                                      }
-                                      setSheetState(() {});
-                                    },
-                                    onUpload: (image) async {
-                                      await _uploadPoleImage(
-                                        pole: pole,
-                                        slot: slot,
-                                        image: image,
-                                        refreshDialog: () =>
-                                            setSheetState(() {}),
-                                      );
-                                    },
-                                  ),
-                                ),
-                              const SizedBox(height: 8),
-                              const Text(
-                                'Images are securely synced to your Google Drive.',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(
-                                  color: Color(0xFF64748B),
-                                  fontSize: 12,
-                                ),
-                              ),
-                              const SizedBox(height: 16),
-                            ],
+                      const SizedBox(height: 16),
+                      for (int slot = 1; slot <= 3; slot++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: _buildImageSlot(
+                            context: context,
+                            pole: pole,
+                            slot: slot,
+                            image: images[slot],
+                            uploading: _uploadingImages[
+                                    _imageKey(pole.poleNumber, slot)] ??
+                                false,
+                            uploadedUrl: _uploadedImageUrls[
+                                _imageKey(pole.poleNumber, slot)],
+                            error: _imageErrors[
+                                _imageKey(pole.poleNumber, slot)],
+                            onImageChanged: (image) {
+                              if (image == null) {
+                                images.remove(slot);
+                              } else {
+                                images[slot] = image;
+                              }
+                              setDialogState(() {});
+                            },
+                            onUpload: (image) async {
+                              await _uploadPoleImage(
+                                pole: pole,
+                                slot: slot,
+                                image: image,
+                                refreshDialog: () => setDialogState(() {}),
+                              );
+                            },
                           ),
                         ),
-                      ),
-                      SizedBox(
-                        width: double.infinity,
-                        child: TextButton(
-                          style: TextButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                            backgroundColor: Colors.white.withOpacity(0.05),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                          onPressed: () => Navigator.of(bottomSheetContext).pop(),
-                          child: const Text(
-                            'Close',
-                            style: TextStyle(
-                              color: Colors.white,
-                              fontSize: 16,
-                              fontWeight: FontWeight.w600,
-                            ),
-                          ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Images are uploaded to the backend and linked to this exact pole number.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Color(0xFF64748B),
+                          fontSize: 11,
                         ),
                       ),
                     ],
                   ),
                 ),
               ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Close'),
+                ),
+              ],
             );
           },
         );
@@ -1138,12 +1048,12 @@ class _HomeScreenState extends State<HomeScreen> {
     required BuildContext context,
     required Pole pole,
     required int slot,
-    required XFile? image,
+    required dynamic image,
     required bool uploading,
     required String? uploadedUrl,
     required String? error,
-    required ValueChanged<XFile?> onImageChanged,
-    required Future<void> Function(XFile image) onUpload,
+    required ValueChanged<dynamic> onImageChanged,
+    required Future<void> Function(dynamic image) onUpload,
   }) {
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1199,73 +1109,50 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
               ),
-              if (pole.uploadedSlots.contains(slot))
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16),
-                  child: Row(
-                    children: [
-                      Icon(
-                        uploadedUrl == 'local://pending' ? Icons.schedule : Icons.check_circle,
-                        color: uploadedUrl == 'local://pending' ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
-                        size: 20,
-                      ),
-                      const SizedBox(width: 8),
-                      Text(
-                        uploadedUrl == 'local://pending' ? 'Queued' : 'Completed',
-                        style: TextStyle(
-                          color: uploadedUrl == 'local://pending' ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ],
-                  ),
-                )
-              else ...[
-                IconButton(
-                  tooltip: 'Take photo',
-                  icon: const Icon(
-                    Icons.camera_alt_outlined,
-                    color: Color(0xFF38BDF8),
-                  ),
-                  onPressed: uploading
-                      ? null
-                      : () async {
-                          final picked = await _imagePicker.pickImage(
-                            source: ImageSource.camera,
-                            imageQuality: 85,
-                          );
-                          if (picked != null) onImageChanged(picked);
-                        },
+              IconButton(
+                tooltip: 'Take photo',
+                icon: const Icon(
+                  Icons.camera_alt_outlined,
+                  color: Color(0xFF38BDF8),
                 ),
-                IconButton(
-                  tooltip: 'Choose from gallery',
-                  icon: const Icon(
-                    Icons.photo_library_outlined,
-                    color: Color(0xFF94A3B8),
-                  ),
-                  onPressed: uploading
-                      ? null
-                      : () async {
-                          final picked = await _imagePicker.pickImage(
-                            source: ImageSource.gallery,
-                            imageQuality: 85,
-                          );
-                          if (picked != null) onImageChanged(picked);
-                        },
+                onPressed: uploading
+                    ? null
+                    : () async {
+                        final picked = await _imagePicker.pickImage(
+                          source: ImageSource.camera,
+                          imageQuality: 85,
+                        );
+                        if (picked != null) onImageChanged(picked);
+                      },
+              ),
+              IconButton(
+                tooltip: 'Choose from gallery',
+                icon: const Icon(
+                  Icons.photo_library_outlined,
+                  color: Color(0xFF94A3B8),
                 ),
-                if (image != null)
-                  IconButton(
-                    tooltip: 'Remove',
-                    icon: const Icon(
-                      Icons.delete_outline,
-                      color: Color(0xFFF43F5E),
-                    ),
-                    onPressed: uploading ? null : () => onImageChanged(null),
+                onPressed: uploading
+                    ? null
+                    : () async {
+                        final picked = await _imagePicker.pickImage(
+                          source: ImageSource.gallery,
+                          imageQuality: 85,
+                        );
+                        if (picked != null) onImageChanged(picked);
+                      },
+              ),
+              if (image != null)
+                IconButton(
+                  tooltip: 'Remove',
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    color: Color(0xFFF43F5E),
                   ),
-              ],
+                  onPressed: uploading ? null : () => onImageChanged(null),
+                ),
             ],
           ),
-          if (image != null && !pole.uploadedSlots.contains(slot)) ...[
+          if (image != null) ...[
             const SizedBox(height: 8),
             SizedBox(
               width: double.infinity,
@@ -1280,6 +1167,28 @@ class _HomeScreenState extends State<HomeScreen> {
                     : const Icon(Icons.cloud_upload_outlined, size: 17),
                 label: Text(uploading ? 'Uploading...' : 'Save Image $slot'),
               ),
+            ),
+          ],
+          if (uploadedUrl != null) ...[
+            const SizedBox(height: 5),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(
+                  Icons.check_circle,
+                  color: Color(0xFF10B981),
+                  size: 15,
+                ),
+                SizedBox(width: 5),
+                Text(
+                  'Uploaded successfully',
+                  style: TextStyle(
+                    color: Color(0xFF10B981),
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ],
             ),
           ],
           if (error != null) ...[
@@ -1479,12 +1388,21 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         actions: [
           IconButton(
+            icon: const Icon(Icons.dashboard, color: Color(0xFF38BDF8)),
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(builder: (context) => const DashboardScreen()),
+              );
+            },
+          ),
+          IconButton(
             tooltip: 'Refresh Connection',
             icon: const Icon(
               Icons.refresh,
               color: Color(0xFF38BDF8),
             ),
-            onPressed: () => _initDataAndCheckBackend(forceRefresh: true),
+            onPressed: _initDataAndCheckBackend,
           ),
         ],
       ),
@@ -1518,7 +1436,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.3),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1848,58 +1766,49 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color:
-              const Color(0xFF38BDF8).withOpacity(0.4),
+              const Color(0xFF38BDF8).withValues(alpha: 0.4),
         ),
       ),
       child: Row(
         mainAxisAlignment:
             MainAxisAlignment.spaceBetween,
         children: [
-          Expanded(
-            child: Row(
-              children: [
-                const Icon(
-                  Icons.pin_drop,
-                  color: Color(0xFF38BDF8),
-                  size: 18,
+          Row(
+            children: [
+              const Icon(
+                Icons.pin_drop,
+                color: Color(0xFF38BDF8),
+                size: 18,
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'Filtered Pending Poles: ${_filteredPoles.length}',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
                 ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Filtered Pending Poles: ${_filteredPoles.length}',
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 14,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-              ],
-            ),
+              ),
+            ],
           ),
           if (_selectedStartingPole != null)
-            Flexible(
-              child: Container(
-                margin: const EdgeInsets.only(left: 8),
-                padding:
-                    const EdgeInsets.symmetric(
-                  horizontal: 10,
-                  vertical: 4,
-                ),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0369A1),
-                  borderRadius:
-                      BorderRadius.circular(20),
-                ),
-                child: Text(
-                  'Start: $_selectedStartingPole',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 12,
-                    fontWeight: FontWeight.bold,
-                  ),
-                  overflow: TextOverflow.ellipsis,
+            Container(
+              padding:
+                  const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 4,
+              ),
+              decoration: BoxDecoration(
+                color: const Color(0xFF0369A1),
+                borderRadius:
+                    BorderRadius.circular(20),
+              ),
+              child: Text(
+                'Start: $_selectedStartingPole',
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
             ),
@@ -1913,28 +1822,7 @@ class _HomeScreenState extends State<HomeScreen> {
       return _buildInstructionState(
         icon: Icons.sync,
         message:
-            'Loading live pending poles from Schnell IoT...\nPlease wait.',
-      );
-    }
-
-    if (_poleLoadError != null) {
-      return Column(
-        children: [
-          _buildInstructionState(
-            icon: Icons.error_outline,
-            message: 'Unable to load pending poles.\n\n$_poleLoadError',
-          ),
-          const SizedBox(height: 16),
-          ElevatedButton.icon(
-            onPressed: () => _applyFilters(generation: _selectionGeneration),
-            icon: const Icon(Icons.refresh),
-            label: const Text('Retry'),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF38BDF8),
-              foregroundColor: Colors.white,
-            ),
-          ),
-        ],
+            'Loading live pending poles from Schnell IoTâ€¦\nPlease wait.',
       );
     }
 
@@ -2003,49 +1891,49 @@ class _HomeScreenState extends State<HomeScreen> {
                   ),
                 ),
                 Expanded(
-                  flex: 4,
+                  flex: 3,
                   child: Text(
                     'POLE NO.',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight:
                           FontWeight.bold,
-                      fontSize: 11,
+                      fontSize: 13,
+                    ),
+                  ),
+                ),
+                Expanded(
+                  flex: 3,
+                  child: Text(
+                    'DISTANCE',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight:
+                          FontWeight.bold,
+                      fontSize: 13,
                     ),
                   ),
                 ),
                 Expanded(
                   flex: 2,
                   child: Text(
-                    'DIST',
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
-                      fontSize: 11,
-                    ),
-                  ),
-                ),
-                Expanded(
-                  flex: 1,
-                  child: Text(
-                    'PICS',
+                    'IMAGES',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
-                      fontSize: 11,
+                      fontSize: 13,
                     ),
                   ),
                 ),
                 Expanded(
-                  flex: 2,
+                  flex: 3,
                   child: AlignmentTextRight(
-                    'MAP',
+                    'LOCATION',
                     style: TextStyle(
                       color: Colors.white,
                       fontWeight:
                           FontWeight.bold,
-                      fontSize: 11,
+                      fontSize: 13,
                     ),
                   ),
                 ),
@@ -2081,7 +1969,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 color: isStartingPole
                     ? const Color(0xFF0284C7)
-                        .withOpacity(0.15)
+                        .withValues(alpha: 0.15)
                     : null,
                 child: Row(
                   children: [
@@ -2105,49 +1993,47 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Pole Number
                     Expanded(
-                      flex: 4,
+                      flex: 3,
                       child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Expanded(
-                            child: InkWell(
-                              onTap: () => _showIoTPoleDetails(pole),
-                              borderRadius: BorderRadius.circular(4),
-                              child: Row(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Expanded(
-                                    child: Text(
-                                      pole.poleNumber,
-                                      style: const TextStyle(
-                                        color: Colors.white,
-                                        fontWeight: FontWeight.w600,
-                                        fontSize: 11,
-                                      ),
+                          InkWell(
+                            onTap: () => _showIoTPoleDetails(pole),
+                            borderRadius: BorderRadius.circular(4),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    pole.poleNumber,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.w600,
+                                      fontSize: 14,
                                     ),
                                   ),
-                                  const SizedBox(width: 4),
-                                  if (_loadingIoTPole == pole.poleNumber)
-                                    const SizedBox(
-                                      width: 12,
-                                      height: 12,
-                                      child: CircularProgressIndicator(
-                                        strokeWidth: 2,
-                                      ),
-                                    )
-                                  else
-                                    const Icon(
-                                      Icons.bolt,
-                                      color: Color(0xFF10B981),
-                                      size: 14,
+                                ),
+                                const SizedBox(width: 5),
+                                if (_loadingIoTPole == pole.poleNumber)
+                                  const SizedBox(
+                                    width: 12,
+                                    height: 12,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
                                     ),
-                                ],
-                              ),
+                                  )
+                                else
+                                  const Icon(
+                                    Icons.bolt,
+                                    color: Color(0xFF10B981),
+                                    size: 14,
+                                  ),
+                              ],
                             ),
                           ),
                           if (isStartingPole) ...[
                             const SizedBox(
-                              width: 2,
+                              width: 4,
                             ),
                             const Icon(
                               Icons.star,
@@ -2162,12 +2048,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Distance
                     Expanded(
-                      flex: 2,
+                      flex: 3,
                       child: Container(
                         padding:
                             const EdgeInsets
                                 .symmetric(
-                          horizontal: 4,
+                          horizontal: 8,
                           vertical: 3,
                         ),
                         alignment:
@@ -2195,11 +2081,11 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Technician Images
                     Expanded(
-                      flex: 1,
+                      flex: 2,
                       child: Align(
                         alignment: Alignment.center,
                         child: InkWell(
-                          onTap: pole.uploadedSlots.length >= 3 ? null : () => _showPoleImages(pole),
+                          onTap: () => _showPoleImages(pole),
                           borderRadius: BorderRadius.circular(6),
                           child: Container(
                             padding: const EdgeInsets.symmetric(
@@ -2210,12 +2096,12 @@ class _HomeScreenState extends State<HomeScreen> {
                               color: const Color(0xFF0F172A),
                               borderRadius: BorderRadius.circular(6),
                               border: Border.all(
-                                color: pole.uploadedSlots.length >= 3 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                                color: const Color(0xFF38BDF8),
                               ),
                             ),
-                            child: Icon(
-                              pole.uploadedSlots.length >= 3 ? Icons.check_circle : Icons.camera_alt_outlined,
-                              color: pole.uploadedSlots.length >= 3 ? const Color(0xFF10B981) : const Color(0xFF38BDF8),
+                            child: const Icon(
+                              Icons.camera_alt_outlined,
+                              color: Color(0xFF38BDF8),
                               size: 16,
                             ),
                           ),
@@ -2225,7 +2111,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
                     // Google Maps
                     Expanded(
-                      flex: 2,
+                      flex: 3,
                       child: Align(
                         alignment:
                             Alignment.centerRight,
@@ -2258,7 +2144,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color:
                                     const Color(
                                   0xFF38BDF8,
-                                ).withOpacity(0.5),
+                                ).withValues(alpha: 0.5),
                               ),
                             ),
                             child: const Row(
@@ -2266,7 +2152,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                   MainAxisSize.min,
                               children: [
                                 Text(
-                                  '📍',
+                                  'ðŸ“',
                                   style:
                                       TextStyle(
                                     fontSize: 12,
@@ -2363,3 +2249,4 @@ class AlignmentTextRight extends StatelessWidget {
     );
   }
 }
+

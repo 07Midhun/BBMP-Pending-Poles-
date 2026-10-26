@@ -26,12 +26,31 @@ class _LoginScreenState extends State<LoginScreen> {
   Future<void> _checkAccountExists() async {
     final prefs = await SharedPreferences.getInstance();
     final savedUser = prefs.getString('saved_username');
+    final loginDate = prefs.getString('login_date');
     
-    // If no account exists, default to Sign Up
-    if (savedUser == null) {
-      setState(() {
-        _isSignUp = true;
+    final today = DateTime.now().toIso8601String().split('T')[0];
+    
+    if (savedUser != null && loginDate == today) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(builder: (_) => const HomeScreen()),
+          );
+        }
       });
+    } else if (savedUser != null) {
+      if (mounted) {
+        setState(() {
+          _usernameController.text = savedUser;
+          _isSignUp = false;
+        });
+      }
+    } else {
+      if (mounted) {
+        setState(() {
+          _isSignUp = true;
+        });
+      }
     }
   }
 
@@ -45,11 +64,13 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now().toIso8601String().split('T')[0];
 
     if (_isSignUp) {
       // Create new account locally
       await prefs.setString('saved_username', username);
       await prefs.setString('saved_password', password);
+      await prefs.setString('login_date', today);
       
       if (mounted) {
         Navigator.of(context).pushReplacement(
@@ -62,6 +83,7 @@ class _LoginScreenState extends State<LoginScreen> {
       final savedPass = prefs.getString('saved_password');
 
       if (savedUser == username && savedPass == password) {
+        await prefs.setString('login_date', today);
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => const HomeScreen()),

@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: bbmp-pending-poles-backend
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.2
+      - key: SCHNELL_IOT_EMAIL
+        sync: false
+      - key: SCHNELL_IOT_PASSWORD
+        sync: false
+      - key: THINGSBOARD_URL
+        value: https://schnelliot.in
+      - key: GOOGLE_DRIVE_FOLDER_ID
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SHEET_NAME
+        value: Pole Data
+      - key: GOOGLE_SERVICE_ACCOUNT_FILE
+        value: /etc/secrets/google-service-account.json
+      - key: DATABASE_URL
+        sync: false

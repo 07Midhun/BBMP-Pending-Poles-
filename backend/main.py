@@ -44,6 +44,15 @@ from excel_parser import (
     normalize_lamp_type
 )
 
+try:
+    from database import init_db, SessionLocal, is_db_connected
+    from models_db import PoleDB
+except Exception as _db_imp_err:
+    print(f"[DATABASE] Import warning: {_db_imp_err}")
+    SessionLocal = None
+    PoleDB = None
+
+
 
 # ============================================================
 # FASTAPI APP
@@ -1336,7 +1345,8 @@ def read_root():
         ),
         "iot_credentials_configured": bool(
             email and password
-        )
+        ),
+        "database_connected": is_db_connected() if SessionLocal is not None else False
     }
 
 
@@ -1346,12 +1356,25 @@ def read_root():
 
 @app.get("/api/v1/regions")
 def get_regions():
+    if SessionLocal is not None and PoleDB is not None:
+        try:
+            db = SessionLocal()
+            try:
+                db_regions = [
+                    str(r[0]).strip() for r in db.query(PoleDB.region).distinct().order_by(PoleDB.region).all()
+                    if r[0] and str(r[0]).strip()
+                ]
+                if db_regions:
+                    return {
+                        "regions": db_regions,
+                        "source": "neon_postgresql"
+                    }
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[REGIONS] Neon query error: {exc}")
 
-    # Regions are the two configured BBMP region assets directly under the
-    # Bangalore (BBMP) ThingsBoard customer. Do not force the UI to wait for
-    # the full live pending-pole calculation just to populate this dropdown.
-    # The actual pole records and pending calculation remain live from
-    # ThingsBoard in /api/v1/poles/filter.
+    # Fallback to configured regions
     regions = [
         "BOMMANAHALLI",
         "EAST",
@@ -1374,13 +1397,28 @@ def get_zones(
         description="Selected Region name"
     )
 ):
-    """
-    Return Region -> Zone directly from the ThingsBoard hierarchy.
+    if SessionLocal is not None and PoleDB is not None:
+        try:
+            db = SessionLocal()
+            try:
+                q = db.query(PoleDB.zone).distinct()
+                if region:
+                    q = q.filter(PoleDB.region.ilike(region.strip()))
+                db_zones = [
+                    str(z[0]).strip() for z in q.order_by(PoleDB.zone).all()
+                    if z[0] and str(z[0]).strip()
+                ]
+                if db_zones:
+                    return {
+                        "region": region,
+                        "zones": db_zones,
+                        "source": "neon_postgresql"
+                    }
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[ZONES] Neon query error: {exc}")
 
-    Do not scan the Pole Survey dataset here.  The hierarchy is represented
-    by Contains relations, so this endpoint only asks ThingsBoard for the
-    immediate children of the selected region.
-    """
     if not region:
         return {
             "region": region,
@@ -1490,13 +1528,31 @@ def get_wards(
         description="Selected Zone name"
     )
 ):
-    """
-    Return Region -> Zone -> Ward directly from the ThingsBoard hierarchy.
+    if SessionLocal is not None and PoleDB is not None:
+        try:
+            db = SessionLocal()
+            try:
+                q = db.query(PoleDB.ward).distinct()
+                if region:
+                    q = q.filter(PoleDB.region.ilike(region.strip()))
+                if zone:
+                    q = q.filter(PoleDB.zone.ilike(zone.strip()))
+                db_wards = [
+                    str(w[0]).strip() for w in q.order_by(PoleDB.ward).all()
+                    if w[0] and str(w[0]).strip()
+                ]
+                if db_wards:
+                    return {
+                        "region": region,
+                        "zone": zone,
+                        "wards": db_wards,
+                        "source": "neon_postgresql"
+                    }
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[WARDS] Neon query error: {exc}")
 
-    This endpoint deliberately does NOT call _get_live_pending_records(),
-    because that would fetch the complete Pole Survey + Lamp Installation
-    datasets just to populate the Ward dropdown.
-    """
     if not region or not zone:
         return {
             "region": region,
@@ -1803,6 +1859,41 @@ def get_lamp_types(
             detail="Invalid Pole With Old Lamp classification",
         )
 
+    if SessionLocal is not None and PoleDB is not None:
+        try:
+            db = SessionLocal()
+            try:
+                q = db.query(PoleDB.lamp_type).distinct()
+                if pol_cls:
+                    q = q.filter(PoleDB.pole_old_lamp.ilike(pol_cls))
+                if region:
+                    q = q.filter(PoleDB.region.ilike(region.strip()))
+                if zone:
+                    q = q.filter(PoleDB.zone.ilike(zone.strip()))
+                if ward:
+                    q = q.filter(PoleDB.ward.ilike(ward.strip()))
+                
+                db_ltypes = sorted(list({
+                    str(lt[0]).strip() for lt in q.all()
+                    if lt[0] and str(lt[0]).strip()
+                }))
+                if pol_cls == "Empty" and not db_ltypes:
+                    db_ltypes = ["-"]
+                if db_ltypes:
+                    return {
+                        "region": region,
+                        "zone": zone,
+                        "ward": ward,
+                        "pole_old_lamp": pol_cls,
+                        "lamp_types": db_ltypes,
+                        "count": len(db_ltypes),
+                        "source": "neon_postgresql",
+                    }
+            finally:
+                db.close()
+        except Exception as exc:
+            print(f"[LAMP_TYPES] Neon query error: {exc}")
+
     # Use exactly the same live pending dataset as /poles/filter.
     records = _get_live_pending_records().copy()
 
@@ -2062,9 +2153,51 @@ def _matches_lamp_type(
 def filter_poles(
     req: FilterRequest
 ):
+    if SessionLocal is not None and PoleDB is not None:
+        try:
+            session = SessionLocal()
+            try:
+                count_db = session.query(PoleDB).count()
+                if count_db > 0:
+                    q = session.query(PoleDB).filter(PoleDB.is_installed == False)
+                    if req.region:
+                        q = q.filter(PoleDB.region.ilike(req.region.strip()))
+                    if req.zone:
+                        q = q.filter(PoleDB.zone.ilike(req.zone.strip()))
+                    if req.ward:
+                        q = q.filter(PoleDB.ward.ilike(req.ward.strip()))
+                    if req.pole_old_lamp:
+                        q = q.filter(PoleDB.pole_old_lamp.ilike(req.pole_old_lamp.strip()))
+                    if req.lamp_type:
+                        q = q.filter(PoleDB.lamp_type.ilike(req.lamp_type.strip()))
 
-    # Production path: use live ThingsBoard data. Do not silently fall back
-    # to the old sample dataset if the live service is unavailable.
+                    matched = [p.to_dict() for p in q.order_by(PoleDB.pole_number).all()]
+
+                    # Graceful fallback: If 0 poles for specific ward, search zone level
+                    if not matched and req.ward:
+                        q_fb = session.query(PoleDB).filter(PoleDB.is_installed == False)
+                        if req.region:
+                            q_fb = q_fb.filter(PoleDB.region.ilike(req.region.strip()))
+                        if req.zone:
+                            q_fb = q_fb.filter(PoleDB.zone.ilike(req.zone.strip()))
+                        if req.pole_old_lamp:
+                            q_fb = q_fb.filter(PoleDB.pole_old_lamp.ilike(req.pole_old_lamp.strip()))
+                        if req.lamp_type:
+                            q_fb = q_fb.filter(PoleDB.lamp_type.ilike(req.lamp_type.strip()))
+                        matched = [p.to_dict() for p in q_fb.order_by(PoleDB.pole_number).all()]
+
+                    if matched or req.ward:
+                        return {
+                            "count": len(matched),
+                            "poles": matched,
+                            "source": "neon_postgresql"
+                        }
+            finally:
+                session.close()
+        except Exception as exc:
+            print(f"[FILTER_POLES] Neon query error: {exc}")
+
+    # Fallback path: use in-memory/cache
     results = _get_live_pending_records(force_refresh=req.force_refresh).copy()
 
     if req.region:
@@ -3717,6 +3850,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=int(os.environ.get("PORT", 8000)),
         reload=False
     )

@@ -5,17 +5,9 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:http/http.dart' as http;
-import 'package:http_parser/http_parser.dart';
 
 import '../models/pole_model.dart';
 import '../services/api_service.dart';
-
-class _ImageFormat {
-  final String extension;
-  final String mimeType;
-
-  const _ImageFormat(this.extension, this.mimeType);
-}
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -32,6 +24,7 @@ class _HomeScreenState extends State<HomeScreen> {
   bool _loadingPoles = false;
   int _selectionGeneration = 0;
   int _distanceRequestId = 0;
+  // ignore: unused_field
   int _lampTypeRequestId = 0;
 
   final ImagePicker _imagePicker = ImagePicker();
@@ -58,6 +51,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
   // Latest backend result for the selected Region / Zone / Ward.
   // Lamp classification filters are then applied locally for instant updates.
+  // ignore: unused_field
   List<Pole> _baseFilteredPoles = [];
 
   // Filtered & Distance Ordered Results
@@ -173,7 +167,7 @@ class _HomeScreenState extends State<HomeScreen> {
       if (zones.isEmpty) {
         try {
           final uri = Uri.parse(
-            'http://192.168.3.149:8000/api/v1/zones'
+            'https://bbmp-pending-poles-4.onrender.com/api/v1/zones'
             '?region=${Uri.encodeQueryComponent(regionForRequest)}',
           );
           final response = await http.get(uri).timeout(
@@ -399,10 +393,10 @@ class _HomeScreenState extends State<HomeScreen> {
     // clear a successful pending-pole result.
     try {
       final types = await ApiService.fetchLampTypes(
-        newOldLamp,
-        region: region,
-        zone: zone,
-        ward: ward,
+        region: _selectedRegion,
+        zone: _selectedZone,
+        ward: _selectedWard,
+        poleOldLamp:newOldLamp,
       );
 
       if (!mounted ||
@@ -806,61 +800,10 @@ class _HomeScreenState extends State<HomeScreen> {
   String _imageKey(String poleNumber, int slot) =>
       '$poleNumber::$slot';
 
-  _ImageFormat? _detectImageFormat(List<int> bytes, String? reportedMimeType) {
-    bool startsWith(List<int> signature) {
-      if (bytes.length < signature.length) return false;
-      for (int i = 0; i < signature.length; i++) {
-        if (bytes[i] != signature[i]) return false;
-      }
-      return true;
-    }
-
-    // JPEG: FF D8 FF
-    if (startsWith(const [0xFF, 0xD8, 0xFF])) {
-      return const _ImageFormat('jpg', 'image/jpeg');
-    }
-
-    // PNG: 89 50 4E 47 0D 0A 1A 0A
-    if (startsWith(const [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])) {
-      return const _ImageFormat('png', 'image/png');
-    }
-
-    // GIF: GIF87a or GIF89a
-    if (startsWith(const [0x47, 0x49, 0x46, 0x38])) {
-      return const _ImageFormat('gif', 'image/gif');
-    }
-
-    // WEBP: RIFF....WEBP
-    if (bytes.length >= 12 &&
-        startsWith(const [0x52, 0x49, 0x46, 0x46]) &&
-        bytes[8] == 0x57 &&
-        bytes[9] == 0x45 &&
-        bytes[10] == 0x42 &&
-        bytes[11] == 0x50) {
-      return const _ImageFormat('webp', 'image/webp');
-    }
-
-    // Fallback to the picker MIME type only when it is an accepted image type.
-    final mime = reportedMimeType?.toLowerCase().trim();
-    switch (mime) {
-      case 'image/jpeg':
-      case 'image/jpg':
-        return const _ImageFormat('jpg', 'image/jpeg');
-      case 'image/png':
-        return const _ImageFormat('png', 'image/png');
-      case 'image/gif':
-        return const _ImageFormat('gif', 'image/gif');
-      case 'image/webp':
-        return const _ImageFormat('webp', 'image/webp');
-      default:
-        return null;
-    }
-  }
-
   Future<void> _uploadPoleImage({
     required Pole pole,
     required int slot,
-    required XFile image,
+    required dynamic image,
     required VoidCallback refreshDialog,
   }) async {
     final key = _imageKey(pole.poleNumber, slot);
@@ -873,21 +816,9 @@ class _HomeScreenState extends State<HomeScreen> {
 
     try {
       final bytes = await image.readAsBytes();
-      if (bytes.isEmpty) {
-        throw Exception('Selected image is empty. Please choose another image.');
-      }
-
-      // Determine the real image format from the file bytes first. This is
-      // more reliable than image.name, especially for Android gallery files.
-      final imageFormat = _detectImageFormat(bytes, image.mimeType);
-      if (imageFormat == null) {
-        throw Exception(
-          'Uploaded file must be an image. Please choose a JPG, PNG, WEBP, or GIF file.',
-        );
-      }
-
-      final extension = imageFormat.extension;
-      final mimeType = imageFormat.mimeType;
+      final extension = image.name.contains('.')
+          ? image.name.split('.').last.toLowerCase()
+          : 'jpg';
 
       final baseUrl = ApiService.activeBaseUrl;
       final uri = Uri.parse(
@@ -901,7 +832,6 @@ class _HomeScreenState extends State<HomeScreen> {
           'file',
           bytes,
           filename: 'image_$slot.$extension',
-          contentType: MediaType.parse(mimeType),
         ),
       );
 
@@ -944,7 +874,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showPoleImages(Pole pole) async {
-    final images = <int, XFile>{};
+    final images = <int, dynamic>{};
 
     await showDialog<void>(
       context: context,
@@ -1045,12 +975,12 @@ class _HomeScreenState extends State<HomeScreen> {
     required BuildContext context,
     required Pole pole,
     required int slot,
-    required XFile? image,
+    required dynamic image,
     required bool uploading,
     required String? uploadedUrl,
     required String? error,
-    required ValueChanged<XFile?> onImageChanged,
-    required Future<void> Function(XFile image) onUpload,
+    required ValueChanged<dynamic> onImageChanged,
+    required Future<void> Function(dynamic image) onUpload,
   }) {
     return Container(
       padding: const EdgeInsets.all(10),
@@ -1424,7 +1354,7 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.3),
+            color: Colors.black.withValues(alpha: 0.3),
             blurRadius: 10,
             offset: const Offset(0, 4),
           ),
@@ -1754,7 +1684,7 @@ class _HomeScreenState extends State<HomeScreen> {
         borderRadius: BorderRadius.circular(10),
         border: Border.all(
           color:
-              const Color(0xFF38BDF8).withOpacity(0.4),
+              const Color(0xFF38BDF8).withValues(alpha: 0.4),
         ),
       ),
       child: Row(
@@ -1957,7 +1887,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 ),
                 color: isStartingPole
                     ? const Color(0xFF0284C7)
-                        .withOpacity(0.15)
+                        .withValues(alpha: 0.15)
                     : null,
                 child: Row(
                   children: [
@@ -2132,7 +2062,7 @@ class _HomeScreenState extends State<HomeScreen> {
                                 color:
                                     const Color(
                                   0xFF38BDF8,
-                                ).withOpacity(0.5),
+                                ).withValues(alpha: 0.5),
                               ),
                             ),
                             child: const Row(
@@ -2237,3 +2167,4 @@ class AlignmentTextRight extends StatelessWidget {
     );
   }
 }
+

@@ -5,103 +5,125 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/pole_model.dart';
-import 'database_service.dart';
 
 class ApiService {
-  /// Currently active backend URL.
-  ///
-  /// For testing on your physical Android phone, the local computer IP
-  /// is used first.
-  ///
-  /// Your phone successfully reached:
-  /// http://10.18.72.47:8000/
+  // Connect to live cloud backend instead of localhost
   static String activeBaseUrl =
-      'http://10.46.23.63:8000/api/v1';
+      'https://luminex-eytv.onrender.com/api/v1';
+      
+  static String? loggedInUser;
+  static int uploadCount = 0;
 
-  /// Backend URLs tried by the application.
-  ///
-  /// Order:
-  /// 1. Local backend on your computer.
-  /// 2. Render production backend.
-  /// 3. Web local development URL when running Flutter Web.
-    static List<String> get _candidateUrls {
-    final urls = <String>[
-      // Production Vercel backend.
-      'https://bbmp-pending-poles-jljy.vercel.app/api/v1',
-    ];
-
+  static List<String> get _candidateUrls {
     if (kIsWeb) {
-      final webHost = Uri.base.host.trim();
-
-      if (webHost.isNotEmpty &&
-          webHost != 'localhost' &&
-          webHost != '127.0.0.1') {
-        urls.add('http://$webHost:8000/api/v1');
-      }
-
-      urls.add('http://localhost:8000/api/v1');
-      urls.add('http://127.0.0.1:8000/api/v1');
+      return [
+        'https://luminex-eytv.onrender.com/api/v1',
+        'http://localhost:8000/api/v1',
+        'http://127.0.0.1:8000/api/v1',
+      ];
     }
 
-    return urls;
+    // Android physical phone / emulator.
+    return [
+      'https://luminex-eytv.onrender.com/api/v1',
+      'http://10.0.2.2:8000/api/v1',
+      'http://localhost:8000/api/v1',
+    ];
   }
 
-  /// Removes the API path and trailing slash from a backend URL.
-  ///
-  /// Example:
-  /// http://192.168.9.244:8000/api/v1
-  /// becomes:
-  /// http://10.18.72.47:8000
-  static String _rootUrl(String url) {
-    return url
-        .replaceFirst(RegExp(r'/api/v1/?$'), '')
-        .replaceFirst(RegExp(r'/$'), '');
+
+  static Future<bool> login(String username, String password) async {
+    final completer = Completer<bool>();
+    int failedCount = 0;
+
+    for (final url in _candidateUrls) {
+      final loginUrl = '$url/login';
+      
+      http.post(
+        Uri.parse(loginUrl),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({'username': username, 'password': password})
+      ).timeout(const Duration(seconds: 8)).then((response) {
+        if (response.statusCode == 200) {
+          if (!completer.isCompleted) {
+            activeBaseUrl = url;
+            try {
+              final data = jsonDecode(response.body);
+              loggedInUser = data['username'] ?? username;
+              uploadCount = data['upload_count'] ?? 0;
+            } catch (_) {
+              loggedInUser = username;
+            }
+            completer.complete(true);
+          }
+        } else {
+          failedCount++;
+          if (failedCount == _candidateUrls.length && !completer.isCompleted) {
+            completer.complete(false);
+          }
+        }
+      }).catchError((_) {
+        failedCount++;
+        if (failedCount == _candidateUrls.length && !completer.isCompleted) {
+          completer.complete(false);
+        }
+      });
+    }
+    
+    return completer.future;
   }
 
-  /// Checks whether any backend URL is reachable.
+  /// Checks whether the backend root endpoint is reachable.
   ///
   /// The FastAPI backend exposes:
   /// GET /
   static Future<bool> checkHealth() async {
+    // Check activeBaseUrl first
+    try {
+      final rootUrl = activeBaseUrl.replaceFirst('/api/v1', '');
+      final response = await http
+          .get(Uri.parse(rootUrl))
+          .timeout(const Duration(seconds: 25));
+
+      if (response.statusCode == 200) {
+        return true;
+      }
+    } catch (_) {}
+
     for (final url in _candidateUrls) {
-      final rootUrl = _rootUrl(url);
+      if (url == activeBaseUrl) continue;
+      final rootUrl = url.replaceFirst('/api/v1', '');
 
       try {
-        debugPrint('Checking backend: $rootUrl');
-
         final response = await http
             .get(Uri.parse(rootUrl))
-            .timeout(const Duration(seconds: 10));
-
-        debugPrint(
-          'Backend response: '
-          '${response.statusCode} ${response.body}',
-        );
+            .timeout(const Duration(seconds: 15));
 
         if (response.statusCode == 200) {
           activeBaseUrl = url;
-
-          debugPrint(
-            'Backend connected successfully using: '
-            '$activeBaseUrl',
-          );
-
           return true;
         }
-      } catch (error) {
-        debugPrint(
-          'Backend connection failed for '
-          '$rootUrl: $error',
-        );
+      } catch (_) {
+        // Try the next candidate URL.
       }
     }
-
-    debugPrint('Unable to connect to any backend URL.');
 
     return false;
   }
 
-  /// Converts backend error responses into readable messages.
+  static Future<void> refreshUserStats() async {
+    if (loggedInUser == null) return;
+    try {
+      final response = await http
+          .get(Uri.parse('$activeBaseUrl/user/$loggedInUser/stats'))
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        uploadCount = data['upload_count'] ?? uploadCount;
+      }
+    } catch (_) {}
+  }
+
   static String _serverError(
     http.Response response,
     String fallback,
@@ -114,322 +136,198 @@ class ApiService {
         return decoded['detail'].toString();
       }
     } catch (_) {
-      // Ignore invalid JSON responses.
+      // Ignore JSON parsing errors.
     }
 
     return '$fallback (HTTP ${response.statusCode})';
   }
 
-  /// Fetches all available regions.
   static Future<List<String>> fetchRegions() async {
     try {
       final response = await http
           .get(Uri.parse('$activeBaseUrl/regions'))
-          .timeout(const Duration(seconds: 15));
-
-      debugPrint(
-        'Regions response: '
-        '${response.statusCode} ${response.body}',
-      );
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        if (data is Map<String, dynamic>) {
-          return List<String>.from(
-            data['regions'] ?? const [],
-          );
-        }
-
-        if (data is List) {
-          return data
-              .map((item) => item.toString().trim())
-              .where((item) => item.isNotEmpty)
-              .toSet()
-              .toList();
-        }
+        return List<String>.from(
+          data['regions'] ?? const [],
+        );
       }
-    } catch (error) {
-      debugPrint('Error fetching regions: $error');
+    } catch (_) {
+      // Return an empty list if the request fails.
     }
 
     return [];
   }
 
-  /// Fetches zones for the selected region.
   static Future<List<String>> fetchZones(String? region) async {
     try {
-      final url = region != null && region.trim().isNotEmpty
-          ? '$activeBaseUrl/zones?region=${Uri.encodeComponent(region.trim())}'
+      final url = region != null && region.isNotEmpty
+          ? '$activeBaseUrl/zones?region=${Uri.encodeComponent(region)}'
           : '$activeBaseUrl/zones';
 
       final response = await http
           .get(Uri.parse(url))
-          .timeout(const Duration(seconds: 15));
-
-      debugPrint(
-        'Zones response: '
-        '${response.statusCode} ${response.body}',
-      );
+          .timeout(const Duration(seconds: 25));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
 
-        if (data is Map<String, dynamic>) {
-          return List<String>.from(
-            data['zones'] ?? const [],
-          );
-        }
-
-        if (data is List) {
-          return data
-              .map((item) => item.toString().trim())
-              .where((item) => item.isNotEmpty)
-              .toSet()
-              .toList();
-        }
+        return List<String>.from(
+          data['zones'] ?? const [],
+        );
       }
-    } catch (error) {
-      debugPrint('Error fetching zones: $error');
+    } catch (_) {
+      // Return an empty list if the request fails.
     }
 
     return [];
   }
 
-  /// Fetches wards for the selected region and zone.
   static Future<List<String>> fetchWards(
     String? region,
     String zone,
   ) async {
-    final queryParameters = <String, String>{
-      'zone': zone.trim(),
-    };
-
-    if (region != null && region.trim().isNotEmpty) {
-      queryParameters['region'] = region.trim().toUpperCase();
-    }
-
-    final uri = Uri.parse('$activeBaseUrl/wards').replace(
-      queryParameters: queryParameters,
-    );
-
-    debugPrint('Fetching wards from: $uri');
-
     try {
+      final regionParam =
+          region != null && region.isNotEmpty
+              ? 'region=${Uri.encodeComponent(region)}&'
+              : '';
+
+      final url =
+          '$activeBaseUrl/wards?${regionParam}zone=${Uri.encodeComponent(zone)}';
+
       final response = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 45));
+          .get(Uri.parse(url))
+          .timeout(const Duration(seconds: 25));
 
-      debugPrint(
-        'Wards response: '
-        '${response.statusCode} ${response.body}',
-      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
 
-      if (response.statusCode != 200) {
-        throw Exception(
-          _serverError(
-            response,
-            'Unable to load wards',
-          ),
+        return List<String>.from(
+          data['wards'] ?? const [],
         );
       }
-
-      final decoded = json.decode(response.body);
-
-      if (decoded is Map<String, dynamic> &&
-          decoded['wards'] is List) {
-        return (decoded['wards'] as List)
-            .map((item) => item.toString().trim())
-            .where((item) => item.isNotEmpty)
-            .toSet()
-            .toList();
-      }
-
-      if (decoded is List) {
-        return decoded
-            .map((item) => item.toString().trim())
-            .where((item) => item.isNotEmpty)
-            .toSet()
-            .toList();
-      }
-
-      throw Exception(
-        'Invalid wards response from backend',
-      );
-    } catch (error) {
-      debugPrint('Error fetching wards: $error');
-      rethrow;
+    } catch (_) {
+      // Return an empty list if the request fails.
     }
+
+    return [];
   }
 
-  /// Fetches lamp types dynamically based on pole old-lamp type.
-  static Future<List<String>> fetchLampTypes(
-    String poleOldLamp, {
+  /// Fetches lamp types available for the selected hierarchy.
+  ///
+  /// Backend filters:
+  /// - region
+  /// - zone
+  /// - ward
+  /// - pole_old_lamp
+  static Future<List<String>> fetchLampTypes({
     String? region,
     String? zone,
     String? ward,
+    required String poleOldLamp,
   }) async {
-    final query = <String, String>{
-      'pole_old_lamp': poleOldLamp.trim(),
+    final queryParameters = <String, String>{
+      'pole_old_lamp': poleOldLamp,
     };
 
     if (region != null && region.trim().isNotEmpty) {
-      query['region'] = region.trim();
+      queryParameters['region'] = region.trim();
     }
 
     if (zone != null && zone.trim().isNotEmpty) {
-      query['zone'] = zone.trim();
+      queryParameters['zone'] = zone.trim();
     }
 
     if (ward != null && ward.trim().isNotEmpty) {
-      query['ward'] = ward.trim();
+      queryParameters['ward'] = ward.trim();
     }
 
-    final uri = Uri.parse('$activeBaseUrl/lamp-types').replace(
-      queryParameters: query,
+    final uri = Uri.parse(
+      '$activeBaseUrl/lamp-types',
+    ).replace(
+      queryParameters: queryParameters,
     );
 
-    debugPrint(
-      'Fetching dynamic lamp types from: $uri',
-    );
+    final response = await http
+        .get(uri)
+        .timeout(const Duration(seconds: 30));
 
-    try {
-      final response = await http
-          .get(uri)
-          .timeout(const Duration(seconds: 60));
-
-      debugPrint(
-        'Lamp types response: '
-        '${response.statusCode} ${response.body}',
+    if (response.statusCode != 200) {
+      throw Exception(
+        _serverError(
+          response,
+          'Unable to load lamp types',
+        ),
       );
-
-      if (response.statusCode != 200) {
-        throw Exception(
-          _serverError(
-            response,
-            'Unable to load lamp types',
-          ),
-        );
-      }
-
-      final data = json.decode(response.body);
-
-      if (data is! Map<String, dynamic> ||
-          data['lamp_types'] is! List) {
-        throw Exception(
-          'Invalid lamp type response from backend',
-        );
-      }
-
-      return (data['lamp_types'] as List)
-          .map((item) => item.toString().trim())
-          .where((item) => item.isNotEmpty)
-          .toSet()
-          .toList();
-    } catch (error) {
-      debugPrint(
-        'Error fetching lamp types: $error',
-      );
-      rethrow;
     }
+
+    final data = json.decode(response.body);
+
+    if (data is! Map<String, dynamic> ||
+        data['lamp_types'] is! List) {
+      throw Exception(
+        'Invalid lamp type response from backend',
+      );
+    }
+
+    return List<String>.from(data['lamp_types']);
   }
 
-  /// Fetches pending poles based on the selected filters.
   static Future<List<Pole>> filterPendingPoles({
     String? region,
     String? zone,
     String? ward,
     String? poleOldLamp,
     String? lampType,
-    bool forceRefresh = false,
   }) async {
-    final uri = Uri.parse(
-      '$activeBaseUrl/poles/filter',
-    );
+    final response = await http
+        .post(
+          Uri.parse('$activeBaseUrl/poles/filter'),
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({
+            'region': region,
+            'zone': zone,
+            'ward': ward,
+            'pole_old_lamp': poleOldLamp,
+            'lamp_type': lampType,
+          }),
+        )
+        .timeout(const Duration(seconds: 120));
 
-    debugPrint(
-      'Filtering pending poles using: $uri (forceRefresh: $forceRefresh)',
-    );
-
-    try {
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: json.encode({
-              'region': region,
-              'zone': zone,
-              'ward': ward,
-              'pole_old_lamp': poleOldLamp,
-              'lamp_type': lampType,
-              'force_refresh': forceRefresh,
-            }),
-          )
-          .timeout(const Duration(seconds: 120));
-
-      debugPrint(
-        'Pending poles response: '
-        '${response.statusCode} ${response.body}',
+    if (response.statusCode != 200) {
+      throw Exception(
+        _serverError(
+          response,
+          'Unable to filter pending poles',
+        ),
       );
-
-      if (response.statusCode != 200) {
-        throw Exception(
-          _serverError(
-            response,
-            'Unable to filter pending poles',
-          ),
-        );
-      }
-
-      final data = json.decode(response.body);
-
-      if (data is! Map<String, dynamic> ||
-          data['poles'] is! List) {
-        throw Exception(
-          'Invalid pending-pole response from backend',
-        );
-      }
-
-      final poles = (data['poles'] as List)
-          .whereType<Map>()
-          .map(
-            (item) => Pole.fromJson(
-              Map<String, dynamic>.from(item),
-            ),
-          )
-          .toList();
-          
-      // Cache poles for offline use
-      await DatabaseService.instance.cachePoles(poles);
-      return poles;
-    } catch (error) {
-      debugPrint(
-        'Error filtering pending poles: $error. Falling back to local cache.',
-      );
-      
-      try {
-        final cached = await DatabaseService.instance.getCachedPoles(
-          region: region,
-          zone: zone,
-          ward: ward,
-          poleOldLamp: poleOldLamp,
-          lampType: lampType,
-        );
-        if (cached.isNotEmpty) {
-          debugPrint('Successfully loaded ${cached.length} poles from local cache.');
-          return cached;
-        }
-      } catch (cacheError) {
-        debugPrint('Cache fallback failed: $cacheError');
-      }
-
-      rethrow;
     }
+
+    final data = json.decode(response.body);
+
+    if (data is! Map<String, dynamic> ||
+        data['poles'] is! List) {
+      throw Exception(
+        'Invalid pending-pole response from backend',
+      );
+    }
+
+    return (data['poles'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => Pole.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList();
   }
 
-  /// Calculates geographical distances from the selected starting pole.
   static Future<List<Pole>> calculateDistance({
     required String startingPoleNumber,
     String? region,
@@ -438,99 +336,71 @@ class ApiService {
     String? poleOldLamp,
     String? lampType,
   }) async {
-    final uri = Uri.parse(
-      '$activeBaseUrl/poles/calculate-distance',
-    );
-
-    debugPrint(
-      'Calculating distances using: $uri',
-    );
-
-    try {
-      final response = await http
-          .post(
-            uri,
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: json.encode({
-              'starting_pole_number': startingPoleNumber,
-              'region': region,
-              'zone': zone,
-              'ward': ward,
-              'pole_old_lamp': poleOldLamp,
-              'lamp_type': lampType,
-            }),
-          )
-          .timeout(const Duration(seconds: 120));
-
-      debugPrint(
-        'Distance response: '
-        '${response.statusCode} ${response.body}',
-      );
-
-      if (response.statusCode != 200) {
-        throw Exception(
-          _serverError(
-            response,
-            'Unable to calculate pole distances',
+    final response = await http
+        .post(
+          Uri.parse(
+            '$activeBaseUrl/poles/calculate-distance',
           ),
-        );
-      }
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({
+            'starting_pole_number': startingPoleNumber,
+            'region': region,
+            'zone': zone,
+            'ward': ward,
+            'pole_old_lamp': poleOldLamp,
+            'lamp_type': lampType,
+          }),
+        )
+        .timeout(const Duration(seconds: 120));
 
-      final data = json.decode(response.body);
-
-      if (data is! Map<String, dynamic> ||
-          data['poles'] is! List) {
-        throw Exception(
-          'Invalid distance response from backend',
-        );
-      }
-
-      return (data['poles'] as List)
-          .whereType<Map>()
-          .map(
-            (item) => Pole.fromJson(
-              Map<String, dynamic>.from(item),
-            ),
-          )
-          .toList();
-    } catch (error) {
-      debugPrint(
-        'Error calculating distances: $error',
+    if (response.statusCode != 200) {
+      throw Exception(
+        _serverError(
+          response,
+          'Unable to calculate pole distances',
+        ),
       );
-      rethrow;
     }
+
+    final data = json.decode(response.body);
+
+    if (data is! Map<String, dynamic> ||
+        data['poles'] is! List) {
+      throw Exception(
+        'Invalid distance response from backend',
+      );
+    }
+
+    return (data['poles'] as List)
+        .whereType<Map>()
+        .map(
+          (item) => Pole.fromJson(
+            Map<String, dynamic>.from(item),
+          ),
+        )
+        .toList();
   }
 
   /// Looks up one pole directly in Schnell IoT / ThingsBoard.
   ///
-  /// Returns the raw IoT pole information when the pole is found.
+  /// Returns the raw IoT pole information when found.
   /// Returns null when the pole is not found or the request fails.
   static Future<Map<String, dynamic>?> fetchSchnellIoTPole(
     String poleNumber,
   ) async {
     try {
-      final encodedPoleNumber = Uri.encodeComponent(
-        poleNumber,
-      );
-
-      final uri = Uri.parse(
-        '$activeBaseUrl/schnell-iot/pole/$encodedPoleNumber',
-      );
-
-      debugPrint(
-        'Fetching IoT pole from: $uri',
-      );
+      final encodedPoleNumber =
+          Uri.encodeComponent(poleNumber);
 
       final response = await http
-          .get(uri)
+          .get(
+            Uri.parse(
+              '$activeBaseUrl/schnell-iot/pole/$encodedPoleNumber',
+            ),
+          )
           .timeout(const Duration(seconds: 10));
-
-      debugPrint(
-        'IoT pole response: '
-        '${response.statusCode} ${response.body}',
-      );
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -543,10 +413,8 @@ class ApiService {
           );
         }
       }
-    } catch (error) {
-      debugPrint(
-        'Error fetching IoT pole: $error',
-      );
+    } catch (_) {
+      // Return null if the request fails.
     }
 
     return null;
@@ -564,17 +432,11 @@ class ApiService {
     }
 
     try {
-      final uri = Uri.parse(
-        '$activeBaseUrl/schnell-iot/poles',
-      );
-
-      debugPrint(
-        'Fetching multiple IoT poles from: $uri',
-      );
-
       final response = await http
           .post(
-            uri,
+            Uri.parse(
+              '$activeBaseUrl/schnell-iot/poles',
+            ),
             headers: {
               'Content-Type': 'application/json',
             },
@@ -583,11 +445,6 @@ class ApiService {
             }),
           )
           .timeout(const Duration(seconds: 60));
-
-      debugPrint(
-        'Multiple IoT poles response: '
-        '${response.statusCode} ${response.body}',
-      );
 
       if (response.statusCode != 200) {
         return {};
@@ -610,21 +467,30 @@ class ApiService {
         final poleNumber = item['pole_number'];
 
         if (poleNumber is! String ||
-            poleNumber.trim().isEmpty) {
+            poleNumber.isEmpty) {
           continue;
         }
 
-        results[poleNumber] = Map<String, dynamic>.from(
-          item,
-        );
+        results[poleNumber] =
+            Map<String, dynamic>.from(item);
       }
 
       return results;
-    } catch (error) {
-      debugPrint(
-        'Error fetching multiple IoT poles: $error',
-      );
+    } catch (_) {
       return {};
     }
+  }
+  static Future<int> fetchDriveStatus(String poleNumber) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$activeBaseUrl/poles/${Uri.encodeComponent(poleNumber)}/drive-status'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        return data['image_count'] ?? 0;
+      }
+    } catch (_) {}
+    return 0;
   }
 }

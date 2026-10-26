@@ -48,15 +48,15 @@ class SyncService {
         try {
           final request = http.MultipartRequest(
             'POST',
-            Uri.parse('${ApiService.activeBaseUrl}/poles/$poleNumber/upload-image'),
+            Uri.parse('${ApiService.activeBaseUrl}/poles/${Uri.encodeComponent(poleNumber)}/images/$imageSlot'),
           );
-          request.fields['image_slot'] = imageSlot.toString();
+          
           request.files.add(
             await http.MultipartFile.fromPath('file', file.path),
           );
 
-          final response = await request.send();
-          if (response.statusCode == 200) {
+          final response = await request.send().timeout(const Duration(seconds: 15));
+          if (response.statusCode >= 200 && response.statusCode < 300) {
             // Upload successful, clear from queue
             await DatabaseService.instance.markUploadComplete(id);
             // Optionally delete the local file after upload

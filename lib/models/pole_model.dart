@@ -8,6 +8,7 @@ class Pole {
   final String lampType;
   final double latitude;
   final double longitude;
+  final List<int> uploadedSlots;
 
   double? distanceMeters;
   int? order;
@@ -22,6 +23,7 @@ class Pole {
     required this.lampType,
     required this.latitude,
     required this.longitude,
+    this.uploadedSlots = const [],
     this.distanceMeters,
     this.order,
   });
@@ -38,6 +40,7 @@ class Pole {
     String? lampType,
     double? latitude,
     double? longitude,
+    List<int>? uploadedSlots,
     double? distanceMeters,
     int? order,
   }) {
@@ -51,6 +54,7 @@ class Pole {
       lampType: lampType ?? this.lampType,
       latitude: latitude ?? this.latitude,
       longitude: longitude ?? this.longitude,
+      uploadedSlots: uploadedSlots ?? this.uploadedSlots,
       distanceMeters: distanceMeters ?? this.distanceMeters,
       order: order ?? this.order,
     );
@@ -67,6 +71,7 @@ class Pole {
       'lamp_type': lampType,
       'latitude': latitude,
       'longitude': longitude,
+      'uploaded_slots': uploadedSlots,
       'distance_meters': distanceMeters,
       'order': order,
     };
@@ -89,6 +94,11 @@ class Pole {
           '',
       latitude: _toDouble(json['latitude']),
       longitude: _toDouble(json['longitude']),
+      uploadedSlots: (json['uploaded_slots'] as List<dynamic>?)
+              ?.map((e) => int.tryParse(e.toString()) ?? 0)
+              .where((e) => e != 0)
+              .toList() ??
+          [],
       distanceMeters: json['distance_meters'] != null
           ? _toDouble(json['distance_meters'])
           : null,

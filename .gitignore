@@ -56,3 +56,5 @@ backend/.env
 # Google credentials
 backend/credentials/
 *.json
+*.apk
+patch_*.py
