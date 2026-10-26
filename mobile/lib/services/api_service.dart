@@ -7,9 +7,9 @@ import 'package:http/http.dart' as http;
 import '../models/pole_model.dart';
 
 class ApiService {
-  // Connect to live cloud backend instead of localhost
+  // Connect to live cloud backend
   static String activeBaseUrl =
-      'https://luminex-eytv.onrender.com/api/v1';
+      'https://luminex-backend-cel8.onrender.com/api/v1';
       
   static String? loggedInUser;
   static int uploadCount = 0;
@@ -17,6 +17,7 @@ class ApiService {
   static List<String> get _candidateUrls {
     if (kIsWeb) {
       return [
+        'https://luminex-backend-cel8.onrender.com/api/v1',
         'https://luminex-eytv.onrender.com/api/v1',
         'http://localhost:8000/api/v1',
         'http://127.0.0.1:8000/api/v1',
@@ -25,11 +26,13 @@ class ApiService {
 
     // Android physical phone / emulator.
     return [
+      'https://luminex-backend-cel8.onrender.com/api/v1',
       'https://luminex-eytv.onrender.com/api/v1',
       'http://10.0.2.2:8000/api/v1',
       'http://localhost:8000/api/v1',
     ];
   }
+
 
 
   static Future<bool> login(String username, String password) async {
