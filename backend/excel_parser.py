@@ -160,27 +160,29 @@ def parse_excel_dataset(file_path: str) -> List[Dict[str, Any]]:
     else:
         raise ValueError(f"Unsupported file format: {ext}")
         
+    target_patterns = [
+        ("pole_number", ["pole id", "pole_id", "pole number", "pole_number", "pole no", "pole_no"]),
+        ("pole_old_lamp", ["old lamp", "old_lamp", "pole with old lamp", "pole_with_old_lamp"]),
+        ("lamp_type", ["lamp type", "lamp_type"]),
+        ("latitude", ["latitude", "lat"]),
+        ("longitude", ["longitude", "long", "lng"]),
+        ("region", ["region"]),
+        ("zone", ["zone"]),
+        ("ward", ["ward"]),
+    ]
+    
     cols_map = {}
+    mapped_targets = set()
     for col in df.columns:
-        c_clean = str(col).strip().lower().replace(" ", "_").replace("-", "_")
-        if "region" in c_clean:
-            cols_map[col] = "region"
-        elif "zone" in c_clean:
-            cols_map[col] = "zone"
-        elif "ward" in c_clean:
-            cols_map[col] = "ward"
-        elif "pole_no" in c_clean or "pole_number" in c_clean or "pole" in c_clean:
-            cols_map[col] = "pole_number"
-        elif "old_lamp" in c_clean or "pole_with_old_lamp" in c_clean:
-            cols_map[col] = "pole_old_lamp"
-        elif "lamp_type" in c_clean or "lamp" in c_clean:
-            cols_map[col] = "lamp_type"
-        elif "lat" in c_clean:
-            cols_map[col] = "latitude"
-        elif "long" in c_clean or "lng" in c_clean:
-            cols_map[col] = "longitude"
+        c_clean = str(col).strip().lower().replace("-", "_").replace("  ", " ")
+        for target, patterns in target_patterns:
+            if target not in mapped_targets and any(p == c_clean or p == c_clean.replace(" ", "_") for p in patterns):
+                cols_map[col] = target
+                mapped_targets.add(target)
+                break
             
     df = df.rename(columns=cols_map)
+
     
     parsed_poles = []
     for idx, row in df.iterrows():

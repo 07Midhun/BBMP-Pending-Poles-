@@ -1,10 +1,14 @@
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from pathlib import Path
 from dotenv import load_dotenv
 from models_db import Base
 
-# Load environment
+# Load environment from backend directory and current working directory
+backend_env = Path(__file__).resolve().parent / ".env"
+if backend_env.exists():
+    load_dotenv(dotenv_path=backend_env)
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
