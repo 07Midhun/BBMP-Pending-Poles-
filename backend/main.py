@@ -122,10 +122,20 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.getenv(
     "backend/credentials/google-service-account.json",
 ).strip()
 
+LEGACY_PERSONAL_DRIVE_FOLDER_ID = "1TxQrJjCgeXM5Gj0vk0jm21HYE9oINvUe"
+SHARED_DRIVE_POLE_IMAGES_FOLDER_ID = "1ruRU0wr2ZDhfpCZXniLjAgQGkBTp2zBk"
+
 GOOGLE_DRIVE_FOLDER_ID = os.getenv(
     "GOOGLE_DRIVE_FOLDER_ID",
-    "",
-).strip()
+    SHARED_DRIVE_POLE_IMAGES_FOLDER_ID,
+).strip() or SHARED_DRIVE_POLE_IMAGES_FOLDER_ID
+
+if GOOGLE_DRIVE_FOLDER_ID == LEGACY_PERSONAL_DRIVE_FOLDER_ID:
+    print(
+        f"[GOOGLE DRIVE] Auto-remapping legacy personal folder {LEGACY_PERSONAL_DRIVE_FOLDER_ID} "
+        f"to Shared Drive folder {SHARED_DRIVE_POLE_IMAGES_FOLDER_ID}"
+    )
+    GOOGLE_DRIVE_FOLDER_ID = SHARED_DRIVE_POLE_IMAGES_FOLDER_ID
 
 GOOGLE_SHEET_ID = os.getenv(
     "GOOGLE_SHEET_ID",
@@ -216,6 +226,10 @@ def _get_google_services():
     with _google_services_lock:
         if _google_services is not None:
             return _google_services
+
+        global GOOGLE_DRIVE_FOLDER_ID
+        if GOOGLE_DRIVE_FOLDER_ID == LEGACY_PERSONAL_DRIVE_FOLDER_ID or not GOOGLE_DRIVE_FOLDER_ID:
+            GOOGLE_DRIVE_FOLDER_ID = SHARED_DRIVE_POLE_IMAGES_FOLDER_ID
 
         if not GOOGLE_DRIVE_FOLDER_ID:
             raise RuntimeError(
@@ -309,6 +323,10 @@ def _drive_upload_image(
     """Upload or replace the exact pole/slot image in the configured folder."""
     drive_service, _ = _get_google_services()
 
+    global GOOGLE_DRIVE_FOLDER_ID
+    if GOOGLE_DRIVE_FOLDER_ID == LEGACY_PERSONAL_DRIVE_FOLDER_ID or not GOOGLE_DRIVE_FOLDER_ID:
+        GOOGLE_DRIVE_FOLDER_ID = SHARED_DRIVE_POLE_IMAGES_FOLDER_ID
+
     # 1. Find or create the pole sub-folder
     pole_folder_name = _safe_pole_folder_name(pole_number)
     folder_query = (
@@ -321,7 +339,7 @@ def _drive_upload_image(
     existing_folders = drive_service.files().list(
         q=folder_query,
         spaces="drive",
-        corpora="user",
+        corpora="allDrives",
         includeItemsFromAllDrives=True,
         supportsAllDrives=True,
         fields="files(id,name)",
@@ -359,7 +377,7 @@ def _drive_upload_image(
     existing = drive_service.files().list(
         q=query,
         spaces="drive",
-        corpora="user",
+        corpora="allDrives",
         includeItemsFromAllDrives=True,
         supportsAllDrives=True,
         pageSize=10,
@@ -3636,6 +3654,7 @@ async def upload_pole_image(
     google_drive_file_id = None
     google_drive_filename = image_path.name
     google_drive_url = f"/pole-images/{folder_name}/{image_path.name}"
+    google_drive_error = None
 
     # Google Drive upload (if configured)
     if GOOGLE_DRIVE_FOLDER_ID:
@@ -3653,6 +3672,7 @@ async def upload_pole_image(
             google_drive_url = drive_result.get("url", google_drive_url)
             print(f"[GOOGLE DRIVE] Uploaded image {image_slot} for {normalized_pole} -> {google_drive_url}")
         except Exception as exc:
+            google_drive_error = str(exc)
             print("[GOOGLE DRIVE] Upload skipped/failed:", repr(exc))
             google_drive_status = "local_saved"
     else:
@@ -3697,6 +3717,7 @@ async def upload_pole_image(
         "google_drive_url": google_drive_url,
         "google_sheet_status": google_sheet_status,
         "google_sheet_error": google_sheet_error,
+        "google_drive_error": google_drive_error,
     }
 
     metadata.update(
@@ -3773,6 +3794,7 @@ async def upload_pole_image(
         "google_drive_url": google_drive_url,
         "google_sheet_status": google_sheet_status,
         "google_sheet_error": google_sheet_error,
+        "google_drive_error": google_drive_error,
     }
 
 
@@ -3820,6 +3842,31 @@ def get_pole_images(pole_number: str):
         else:
             images[str(slot)] = None
 
+    if SessionLocal and PoleDB:
+        try:
+            session = SessionLocal()
+            try:
+                db_pole = session.query(PoleDB).filter(
+                    (PoleDB.pole_number == normalized_pole)
+                    | (PoleDB.pole_number.ilike(f"%{normalized_pole}%"))
+                ).first()
+                if db_pole:
+                    for slot, url in [(1, db_pole.image_1_url), (2, db_pole.image_2_url), (3, db_pole.image_3_url)]:
+                        if url and images.get(str(slot)) is None:
+                            images[str(slot)] = {
+                                "filename": f"image_{slot}.jpg",
+                                "latitude": live_pole.get("latitude"),
+                                "longitude": live_pole.get("longitude"),
+                                "uploaded_at": None,
+                                "source": "cloud",
+                                "image_url": url,
+                                "google_drive_url": url,
+                            }
+            finally:
+                session.close()
+        except Exception:
+            pass
+
     return {
         "status": "success",
         "pole_number": normalized_pole,
@@ -3841,6 +3888,22 @@ def get_pole_drive_status(pole_number: str):
         for slot in (1, 2, 3):
             if list(pole_folder.glob(f"image_{slot}.*")):
                 image_count += 1
+
+    if SessionLocal and PoleDB:
+        try:
+            session = SessionLocal()
+            try:
+                db_pole = session.query(PoleDB).filter(
+                    (PoleDB.pole_number == normalized_pole)
+                    | (PoleDB.pole_number.ilike(f"%{normalized_pole}%"))
+                ).first()
+                if db_pole and db_pole.uploaded_slots:
+                    image_count = max(image_count, len(db_pole.uploaded_slots))
+            finally:
+                session.close()
+        except Exception:
+            pass
+
     return {
         "status": "success",
         "pole_number": normalized_pole,
