@@ -496,4 +496,28 @@ class ApiService {
     } catch (_) {}
     return 0;
   }
+  static Future<Map<String, dynamic>?> fetchPoleImages(String poleNumber) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$activeBaseUrl/poles/${Uri.encodeComponent(poleNumber)}/images'),
+      ).timeout(const Duration(seconds: 10));
+
+      if (response.statusCode == 200) {
+        return json.decode(response.body);
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  static Future<bool> deletePoleImage(String poleNumber, int imageSlot) async {
+    try {
+      final response = await http.delete(
+        Uri.parse('$activeBaseUrl/poles/${Uri.encodeComponent(poleNumber)}/images/$imageSlot'),
+      ).timeout(const Duration(seconds: 15));
+
+      return response.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 }

@@ -22,7 +22,6 @@ class UploadService {
       'file': await MultipartFile.fromFile(imageFile.path, filename: fileName),
       'pole_number': poleNumber,
       if (ApiService.loggedInUser != null) 'username': ApiService.loggedInUser!,
-      // Metadata fields will go here in Phase 4
     });
 
     try {
@@ -43,6 +42,24 @@ class UploadService {
       );
     } catch (e) {
       throw Exception('Upload interrupted: $e');
+    }
+  }
+
+  Future<bool> deleteImage({
+    required String poleNumber,
+    required int imageSlot,
+  }) async {
+    final String url = '${ApiService.activeBaseUrl}/poles/${Uri.encodeComponent(poleNumber)}/images/$imageSlot';
+    try {
+      final response = await _dio.delete(
+        url,
+        options: Options(
+          validateStatus: (status) => status != null && status < 500,
+        ),
+      );
+      return response.statusCode == 200;
+    } catch (e) {
+      return false;
     }
   }
 }

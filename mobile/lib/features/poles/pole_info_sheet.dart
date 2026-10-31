@@ -1,9 +1,11 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../models/pole_model.dart';
 import '../../app/theme.dart';
+import '../../services/api_service.dart';
 import '../images/image_upload_provider.dart';
 import 'poles_providers.dart';
 
@@ -15,14 +17,23 @@ class PoleInfoSheet extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final uploadStates = ref.watch(uploadStateProvider)[pole.poleNumber] ?? [];
+    final cloudImagesAsync = ref.watch(poleImagesProvider(pole.poleNumber));
     final driveStatusAsync = ref.watch(driveStatusProvider(pole.poleNumber));
+
+    final cloudImages = cloudImagesAsync.value ?? {};
+    int uploadedCount = 0;
+    for (int slot = 1; slot <= 3; slot++) {
+      final hasCloud = cloudImages.containsKey(slot);
+      final hasLocal = uploadStates.any((s) => s.slot == slot && s.status == UploadStatus.success);
+      if (hasCloud || hasLocal) uploadedCount++;
+    }
     int driveCount = driveStatusAsync.value ?? 0;
-    int totalCount = uploadStates.length > driveCount ? uploadStates.length : driveCount;
+    int totalCount = uploadedCount > driveCount ? uploadedCount : driveCount;
 
     return DraggableScrollableSheet(
-      initialChildSize: 0.7,
+      initialChildSize: 0.8,
       minChildSize: 0.4,
-      maxChildSize: 0.9,
+      maxChildSize: 0.95,
       builder: (context, scrollController) {
         return Container(
           decoration: BoxDecoration(
@@ -42,7 +53,11 @@ class PoleInfoSheet extends ConsumerWidget {
                     _buildInfoRow('Zone', pole.zone),
                     _buildInfoRow('Ward', pole.ward),
                     _buildInfoRow('Distance', pole.distanceFormatted),
-                    _buildInfoRow('Status', 'Pending', valueColor: AppTheme.warning),
+                    _buildInfoRow(
+                      'Status',
+                      totalCount >= 3 ? 'Completed (3/3)' : (totalCount > 0 ? 'In Progress ($totalCount/3)' : 'Pending (0/3)'),
+                      valueColor: totalCount >= 3 ? AppTheme.success : (totalCount > 0 ? AppTheme.warning : Colors.white70),
+                    ),
                     _buildInfoRow('Pole with Old Lamp', pole.poleOldLamp),
                     _buildInfoRow('Lamp Type', pole.lampType),
                     const Divider(height: 32, color: Colors.white24),
@@ -64,19 +79,28 @@ class PoleInfoSheet extends ConsumerWidget {
                     ),
                     const Divider(height: 32, color: Colors.white24),
                     
-                    _buildSectionTitle('IMAGES'),
-                    _buildImagesSection(context, ref, uploadStates, totalCount),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _buildSectionTitle('IMAGES ($totalCount/3)'),
+                        if (cloudImagesAsync.isLoading)
+                          const SizedBox(
+                            width: 14,
+                            height: 14,
+                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                          ),
+                      ],
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Upload all 3 required images. If an image is incorrect, you can delete it and take a new one.',
+                      style: TextStyle(fontSize: 12, color: Colors.white54),
+                    ),
+                    const SizedBox(height: 16),
+                    for (int slot = 1; slot <= 3; slot++)
+                      _buildImageSlotCard(context, ref, slot, uploadStates, cloudImages),
                     
                     const SizedBox(height: 32),
-                    if (totalCount < 3)
-                      ElevatedButton(
-                        onPressed: () => _showImageSourceOptions(context, ref, pole.poleNumber),
-                        style: ElevatedButton.styleFrom(
-                          minimumSize: const Size(double.infinity, 50),
-                        ),
-                        child: const Text('UPLOAD IMAGE'),
-                      ),
-                    const SizedBox(height: 32), // padding for bottom
                   ],
                 ),
               ),
@@ -124,7 +148,7 @@ class PoleInfoSheet extends ConsumerWidget {
 
   Widget _buildSectionTitle(String title) {
     return Padding(
-      padding: const EdgeInsets.only(bottom: 16),
+      padding: const EdgeInsets.only(bottom: 12),
       child: Text(
         title,
         style: const TextStyle(
@@ -156,156 +180,357 @@ class PoleInfoSheet extends ConsumerWidget {
     );
   }
 
-  Widget _buildImagesSection(BuildContext context, WidgetRef ref, List<ImageUploadState> uploadStates, int totalCount) {
-    return Column(
-      children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: [
-            ...uploadStates.asMap().entries.map((entry) {
-              return _buildImageItem(context, ref, entry.key, entry.value);
-            }),
-            if (totalCount < 3)
-              _buildAddImageButton(context, ref)
-            else if (uploadStates.length < 3 && totalCount >= 3)
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: AppTheme.success.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.success, style: BorderStyle.solid),
-                ),
-                alignment: Alignment.center,
-                child: Icon(Icons.check_circle, color: AppTheme.success, size: 36),
-              )
-            else if (uploadStates.length >= 3)
-              Container(
-                width: 80,
-                height: 80,
-                decoration: BoxDecoration(
-                  color: AppTheme.success.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.success, style: BorderStyle.solid),
-                ),
-                alignment: Alignment.center,
-                child: Icon(Icons.check_circle, color: AppTheme.success, size: 36),
-              ),
-          ],
-        ),
-      ],
-    );
-  }
+  Widget _buildImageSlotCard(
+    BuildContext context,
+    WidgetRef ref,
+    int slot,
+    List<ImageUploadState> uploadStates,
+    Map<int, Map<String, dynamic>> cloudImages,
+  ) {
+    ImageUploadState? localState;
+    for (var s in uploadStates) {
+      if (s.slot == slot) {
+        localState = s;
+        break;
+      }
+    }
 
-  Widget _buildImageItem(BuildContext context, WidgetRef ref, int index, ImageUploadState state) {
+    final cloudImage = cloudImages[slot];
+    final bool hasCloud = cloudImage != null;
+    final bool hasLocalFile = localState != null;
+    final bool isUploading = localState != null &&
+        (localState.status == UploadStatus.uploading || localState.status == UploadStatus.pending);
+    final bool isFailed = localState != null && localState.status == UploadStatus.failed;
+    final bool isUploaded = hasCloud || (localState != null && localState.status == UploadStatus.success);
+
+    String? imageUrl;
+    if (cloudImage != null) {
+      final backendPath = cloudImage['image_url']?.toString();
+      if (backendPath != null && backendPath.isNotEmpty) {
+        imageUrl = backendPath.startsWith('http')
+            ? backendPath
+            : '${ApiService.activeBaseUrl.replaceFirst('/api/v1', '')}$backendPath';
+      }
+    }
+
     return Container(
-      width: 80,
-      height: 80,
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: AppTheme.surface,
-        borderRadius: BorderRadius.circular(8),
+        borderRadius: BorderRadius.circular(12),
         border: Border.all(
-          color: state.status == UploadStatus.success
-              ? AppTheme.success
-              : (state.status == UploadStatus.failed ? AppTheme.error : Colors.white24),
-        ),
-        image: DecorationImage(
-          image: FileImage(state.file),
-          fit: BoxFit.cover,
-          colorFilter: state.status != UploadStatus.success 
-            ? ColorFilter.mode(Colors.black.withValues(alpha: 0.5), BlendMode.darken) 
-            : null,
+          color: isUploaded
+              ? AppTheme.success.withValues(alpha: 0.6)
+              : (isFailed ? AppTheme.error.withValues(alpha: 0.6) : Colors.white12),
+          width: isUploaded ? 1.5 : 1.0,
         ),
       ),
-      alignment: Alignment.center,
-      child: _buildUploadOverlay(ref, index, state),
+      child: Row(
+        children: [
+          // Thumbnail Preview
+          GestureDetector(
+            onTap: () {
+              if (hasLocalFile && localState?.file != null) {
+                _showFullScreenImage(context, file: localState?.file, slot: slot);
+              } else if (imageUrl != null) {
+                _showFullScreenImage(context, url: imageUrl, slot: slot);
+              }
+            },
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(8),
+              child: Container(
+                width: 68,
+                height: 68,
+                decoration: BoxDecoration(
+                  color: AppTheme.background,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.white24),
+                ),
+                child: hasLocalFile && localState?.file != null
+                    ? Stack(
+                        fit: StackFit.expand,
+                        children: [
+                          Image.file(localState!.file, fit: BoxFit.cover),
+                          if (isUploading)
+                            Container(
+                              color: Colors.black54,
+                              child: Center(
+                                child: SizedBox(
+                                  width: 22,
+                                  height: 22,
+                                  child: CircularProgressIndicator(
+                                    value: localState.progress > 0 ? localState.progress : null,
+                                    strokeWidth: 2.5,
+                                    color: Colors.white,
+                                  ),
+                                ),
+                              ),
+                            ),
+                        ],
+                      )
+                    : (imageUrl != null
+                        ? Image.network(
+                            imageUrl,
+                            fit: BoxFit.cover,
+                            loadingBuilder: (context, child, loadingProgress) {
+                              if (loadingProgress == null) return child;
+                              return const Center(
+                                child: SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white54),
+                                ),
+                              );
+                            },
+                            errorBuilder: (context, error, stackTrace) => const Icon(
+                              Icons.broken_image,
+                              color: Colors.white38,
+                              size: 28,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.add_a_photo_outlined,
+                            color: Colors.white38,
+                            size: 28,
+                          )),
+              ),
+            ),
+          ),
+          const SizedBox(width: 14),
+
+          // Details Column
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Image $slot',
+                  style: const TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                if (isUploading)
+                  Row(
+                    children: [
+                      const SizedBox(
+                        width: 12,
+                        height: 12,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.warning),
+                      ),
+                      const SizedBox(width: 6),
+                      Text(
+                        localState?.progress != null && localState!.progress > 0
+                            ? 'Uploading ${(localState.progress * 100).toInt()}%'
+                            : 'Uploading...',
+                        style: const TextStyle(fontSize: 12, color: AppTheme.warning),
+                      ),
+                    ],
+                  )
+                else if (isFailed)
+                  Row(
+                    children: [
+                      Icon(Icons.error_outline, color: AppTheme.error, size: 14),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Upload failed',
+                        style: TextStyle(fontSize: 12, color: AppTheme.error),
+                      ),
+                    ],
+                  )
+                else if (isUploaded)
+                  Row(
+                    children: [
+                      Icon(Icons.check_circle, color: AppTheme.success, size: 14),
+                      const SizedBox(width: 4),
+                      const Text(
+                        'Uploaded to Drive & Sheets',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: AppTheme.success,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  )
+                else
+                  const Text(
+                    'No image uploaded',
+                    style: TextStyle(fontSize: 12, color: Colors.white54),
+                  ),
+              ],
+            ),
+          ),
+
+          // Actions Row (Delete button if image exists; Camera/Gallery if empty)
+          if (isUploaded || hasLocalFile) ...[
+            if (isFailed)
+              IconButton(
+                tooltip: 'Retry Upload',
+                icon: Icon(Icons.refresh, color: AppTheme.warning, size: 22),
+                onPressed: () {
+                  ref.read(uploadStateProvider.notifier).retrySlotUpload(pole.poleNumber, slot);
+                },
+              ),
+            IconButton(
+              tooltip: 'Delete Image $slot',
+              icon: const Icon(
+                Icons.delete_outline,
+                color: Color(0xFFF43F5E),
+                size: 24,
+              ),
+              onPressed: () => _confirmAndDeleteImage(context, ref, pole.poleNumber, slot),
+            ),
+          ] else ...[
+            IconButton(
+              tooltip: 'Camera',
+              icon: Icon(Icons.camera_alt, color: AppTheme.cyan, size: 22),
+              onPressed: () {
+                ref.read(uploadStateProvider.notifier).pickAndUploadSlotImage(
+                      pole.poleNumber,
+                      slot,
+                      ImageSource.camera,
+                    );
+              },
+            ),
+            IconButton(
+              tooltip: 'Gallery',
+              icon: const Icon(Icons.photo_library_outlined, color: Colors.white70, size: 22),
+              onPressed: () {
+                ref.read(uploadStateProvider.notifier).pickAndUploadSlotImage(
+                      pole.poleNumber,
+                      slot,
+                      ImageSource.gallery,
+                    );
+              },
+            ),
+          ],
+        ],
+      ),
     );
   }
 
-  Widget _buildUploadOverlay(WidgetRef ref, int index, ImageUploadState state) {
-    if (state.status == UploadStatus.uploading || state.status == UploadStatus.pending) {
-      return Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          SizedBox(
-            width: 24,
-            height: 24,
-            child: CircularProgressIndicator(
-              value: state.progress > 0 ? state.progress : null,
-              strokeWidth: 3,
-              valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
-            ),
+  void _confirmAndDeleteImage(
+    BuildContext context,
+    WidgetRef ref,
+    String poleNumber,
+    int slot,
+  ) {
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        backgroundColor: AppTheme.surface,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Row(
+          children: const [
+            Icon(Icons.warning_amber_rounded, color: Color(0xFFF43F5E), size: 26),
+            SizedBox(width: 10),
+            Text('Delete Image?', style: TextStyle(color: Colors.white, fontSize: 18)),
+          ],
+        ),
+        content: Text(
+          'Are you sure you want to delete Image $slot for pole $poleNumber?\n\nThis will remove the file from Google Drive and clear the link in Google Sheets.',
+          style: const TextStyle(color: Colors.white70, fontSize: 14),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('CANCEL', style: TextStyle(color: Colors.white60)),
           ),
-          const SizedBox(height: 4),
-          Text('${(state.progress * 100).toInt()}%', style: const TextStyle(fontSize: 10, fontWeight: FontWeight.bold)),
+          ElevatedButton.icon(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFF43F5E),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              Navigator.pop(dialogCtx);
+
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      ),
+                      const SizedBox(width: 12),
+                      Text('Deleting Image $slot...'),
+                    ],
+                  ),
+                  duration: const Duration(seconds: 2),
+                  backgroundColor: AppTheme.surface,
+                ),
+              );
+
+              final success = await ApiService.deletePoleImage(poleNumber, slot);
+              await ref.read(uploadStateProvider.notifier).deleteSlotImage(poleNumber, slot);
+              ref.refresh(poleImagesProvider(poleNumber));
+              ref.refresh(driveStatusProvider(poleNumber));
+              ref.refresh(polesProvider);
+
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).hideCurrentSnackBar();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      success
+                          ? 'Image $slot deleted successfully from Drive and Sheets!'
+                          : 'Image $slot removed.',
+                    ),
+                    backgroundColor: success ? AppTheme.success : AppTheme.warning,
+                  ),
+                );
+              }
+            },
+            icon: const Icon(Icons.delete_forever, size: 18),
+            label: const Text('DELETE'),
+          ),
         ],
-      );
-    } else if (state.status == UploadStatus.failed) {
-      return IconButton(
-        icon: Icon(Icons.refresh, color: AppTheme.error),
-        onPressed: () {
-          ref.read(uploadStateProvider.notifier).retryUpload(pole.poleNumber, index);
-        },
-      );
-    } else {
-      return const SizedBox.shrink(); // Success has no overlay
-    }
+      ),
+    );
   }
 
-  Widget _buildAddImageButton(BuildContext context, WidgetRef ref) {
-    return InkWell(
-      onTap: () => _showImageSourceOptions(context, ref, pole.poleNumber),
-      child: Container(
-        width: 80,
-        height: 80,
-        decoration: BoxDecoration(
-          color: AppTheme.surface,
-          borderRadius: BorderRadius.circular(8),
-          border: Border.all(color: AppTheme.cyan, style: BorderStyle.solid),
-        ),
-        alignment: Alignment.center,
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+  void _showFullScreenImage(BuildContext context, {File? file, String? url, required int slot}) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        backgroundColor: Colors.transparent,
+        insetPadding: const EdgeInsets.all(16),
+        child: Stack(
+          alignment: Alignment.topRight,
           children: [
-            Icon(Icons.add, color: AppTheme.cyan),
-            const SizedBox(height: 4),
-            Text('Upload', style: TextStyle(fontSize: 10, color: AppTheme.cyan)),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.black87,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: file != null
+                    ? Image.file(file, fit: BoxFit.contain)
+                    : (url != null
+                        ? Image.network(
+                            url,
+                            fit: BoxFit.contain,
+                            errorBuilder: (context, error, stackTrace) => const Padding(
+                              padding: EdgeInsets.all(32),
+                              child: Text('Unable to load full preview', style: TextStyle(color: Colors.white70)),
+                            ),
+                          )
+                        : const SizedBox.shrink()),
+              ),
+            ),
+            IconButton(
+              icon: const Icon(Icons.close, color: Colors.white, size: 28),
+              onPressed: () => Navigator.pop(context),
+            ),
           ],
         ),
       ),
-    );
-  }
-
-  void _showImageSourceOptions(BuildContext context, WidgetRef ref, String poleNumber) {
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: AppTheme.surface,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(16))),
-      builder: (BuildContext context) {
-        return SafeArea(
-          child: Wrap(
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.photo_library, color: Colors.white),
-                title: const Text('Photo Library', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  ref.read(uploadStateProvider.notifier).pickAndUploadImage(poleNumber, ImageSource.gallery);
-                  Navigator.of(context).pop();
-                },
-              ),
-              ListTile(
-                leading: const Icon(Icons.photo_camera, color: Colors.white),
-                title: const Text('Camera', style: TextStyle(color: Colors.white)),
-                onTap: () {
-                  ref.read(uploadStateProvider.notifier).pickAndUploadImage(poleNumber, ImageSource.camera);
-                  Navigator.of(context).pop();
-                },
-              ),
-            ],
-          ),
-        );
-      }
     );
   }
 

@@ -768,6 +768,95 @@ def _update_sheet_image_link(
     )
 
 
+def _clear_sheet_image_link(
+    pole_number: str,
+    image_slot: int,
+) -> None:
+    """Clear the image URL cell in Google Sheets for the specified slot."""
+    try:
+        _, sheets_service = _get_google_services()
+        if not sheets_service or not GOOGLE_SHEET_ID:
+            return
+
+        result = sheets_service.spreadsheets().values().get(
+            spreadsheetId=GOOGLE_SHEET_ID,
+            range=f"'{GOOGLE_SHEET_NAME}'!A:ZZ",
+            majorDimension="ROWS",
+            valueRenderOption="FORMATTED_VALUE",
+        ).execute()
+
+        rows = result.get("values", [])
+        if not rows:
+            return
+
+        headers = [str(value or "").strip() for value in rows[0]]
+        pole_header_names = {
+            "polenumber",
+            "poleno",
+            "pole",
+            "poleid",
+            "poleidnumber",
+        }
+
+        pole_col = next(
+            (
+                index
+                for index, header in enumerate(headers)
+                if _normalise_sheet_header(header) in pole_header_names
+            ),
+            None,
+        )
+
+        if pole_col is None:
+            return
+
+        image_header = f"Image {image_slot}"
+        image_col = next(
+            (
+                index
+                for index, header in enumerate(headers)
+                if _normalise_sheet_header(header)
+                == _normalise_sheet_header(image_header)
+            ),
+            None,
+        )
+
+        if image_col is None:
+            return
+
+        wanted_pole = _normalise_sheet_pole(pole_number)
+        target_row = None
+
+        for row_index, row in enumerate(rows[1:], start=2):
+            if pole_col >= len(row):
+                continue
+            if _normalise_sheet_pole(row[pole_col]) == wanted_pole:
+                target_row = row_index
+                break
+
+        if target_row is not None:
+            target_cell = (
+                f"'{GOOGLE_SHEET_NAME}'!"
+                f"{_sheet_column_letter(image_col)}{target_row}"
+            )
+            print(
+                "[GOOGLE SHEETS] Clearing cell:",
+                target_cell,
+                "for pole:",
+                pole_number,
+                "slot:",
+                image_slot,
+            )
+            sheets_service.spreadsheets().values().update(
+                spreadsheetId=GOOGLE_SHEET_ID,
+                range=target_cell,
+                valueInputOption="RAW",
+                body={"values": [[""]]},
+            ).execute()
+    except Exception as exc:
+        print(f"[GOOGLE SHEETS] Failed to clear image {image_slot} link for {pole_number}: {exc}")
+
+
 def _safe_pole_folder_name(pole_number: str) -> str:
     """Keep technician image folders safe and deterministic."""
     value = str(pole_number or "").strip()
@@ -3877,6 +3966,164 @@ def get_pole_images(pole_number: str):
     }
 
 
+@app.delete("/api/v1/poles/{pole_number}/images/{image_slot}")
+def delete_pole_image(
+    pole_number: str,
+    image_slot: int,
+):
+    """Delete a technician image for the specified slot from Drive, Sheets, DB, and local disk."""
+    if image_slot not in (1, 2, 3):
+        raise HTTPException(
+            status_code=400,
+            detail="image_slot must be 1, 2, or 3.",
+        )
+
+    normalized_pole = _normalize_pole_number(pole_number)
+    if not normalized_pole:
+        raise HTTPException(
+            status_code=400,
+            detail="Pole number cannot be empty.",
+        )
+
+    folder_name = _safe_pole_folder_name(normalized_pole)
+    pole_folder = POLE_IMAGES_DIR / folder_name
+
+    # 1. Google Drive Deletion
+    google_drive_status = "not_configured"
+    google_drive_error = None
+    if GOOGLE_DRIVE_FOLDER_ID:
+        try:
+            drive_service, _ = _get_google_services()
+            if drive_service:
+                folder_query = (
+                    f"mimeType = 'application/vnd.google-apps.folder' "
+                    f"and name = '{folder_name}' "
+                    f"and '{GOOGLE_DRIVE_FOLDER_ID}' in parents "
+                    f"and trashed = false"
+                )
+                existing_folders = drive_service.files().list(
+                    q=folder_query,
+                    spaces="drive",
+                    corpora="allDrives",
+                    includeItemsFromAllDrives=True,
+                    supportsAllDrives=True,
+                    fields="files(id,name)",
+                ).execute().get("files", [])
+
+                if existing_folders:
+                    pole_drive_folder_id = existing_folders[0]["id"]
+                    file_query = (
+                        f"name contains '_image_{image_slot}' "
+                        f"and '{pole_drive_folder_id}' in parents "
+                        f"and trashed = false"
+                    )
+                    found_files = drive_service.files().list(
+                        q=file_query,
+                        spaces="drive",
+                        corpora="allDrives",
+                        includeItemsFromAllDrives=True,
+                        supportsAllDrives=True,
+                        fields="files(id,name)",
+                    ).execute().get("files", [])
+
+                    for f in found_files:
+                        try:
+                            drive_service.files().update(
+                                fileId=f["id"],
+                                body={"trashed": True},
+                                supportsAllDrives=True,
+                            ).execute()
+                            print(f"[GOOGLE DRIVE] Trashed file: {f.get('name')} | {f.get('id')}")
+                        except Exception as del_err:
+                            print(f"[GOOGLE DRIVE] Error trashing file {f.get('id')}: {del_err}")
+                    google_drive_status = "deleted"
+                else:
+                    google_drive_status = "folder_not_found"
+        except Exception as exc:
+            google_drive_status = "failed"
+            google_drive_error = str(exc)
+            print(f"[GOOGLE DRIVE] Delete failed for {normalized_pole} slot {image_slot}: {exc}")
+
+    # 2. Google Sheets Cleanup
+    google_sheet_status = "not_configured"
+    google_sheet_error = None
+    if GOOGLE_SHEET_ID:
+        try:
+            _clear_sheet_image_link(normalized_pole, image_slot)
+            google_sheet_status = "cleared"
+        except Exception as exc:
+            google_sheet_status = "failed"
+            google_sheet_error = str(exc)
+            print(f"[GOOGLE SHEETS] Clear failed for {normalized_pole} slot {image_slot}: {exc}")
+
+    # 3. Local Staging Disk Cleanup
+    if pole_folder.exists():
+        for pat in [f"image_{image_slot}.*", f"{folder_name}_image_{image_slot}.*"]:
+            for f in pole_folder.glob(pat):
+                try:
+                    f.unlink()
+                    print(f"[LOCAL] Deleted local image file: {f}")
+                except Exception as un_err:
+                    print(f"[LOCAL] Warning deleting file {f}: {un_err}")
+
+        metadata = _read_image_metadata(pole_folder)
+        images = metadata.get("images")
+        if isinstance(images, dict) and str(image_slot) in images:
+            del images[str(image_slot)]
+            metadata["images"] = images
+            _write_image_metadata(pole_folder, metadata)
+
+    # 4. Neon PostgreSQL DB Persistence
+    if SessionLocal and PoleDB:
+        try:
+            session = SessionLocal()
+            try:
+                db_pole = session.query(PoleDB).filter(
+                    (PoleDB.pole_number == normalized_pole)
+                    | (PoleDB.pole_number.ilike(f"%{normalized_pole}%"))
+                ).first()
+                if db_pole:
+                    slots = list(db_pole.uploaded_slots or [])
+                    if image_slot in slots:
+                        slots.remove(image_slot)
+                    db_pole.uploaded_slots = sorted(slots)
+                    if image_slot == 1:
+                        db_pole.image_1_url = None
+                    elif image_slot == 2:
+                        db_pole.image_2_url = None
+                    elif image_slot == 3:
+                        db_pole.image_3_url = None
+                    session.commit()
+                    print(f"[NEON DB] Cleared image {image_slot} for {normalized_pole}")
+            finally:
+                session.close()
+        except Exception as db_err:
+            print(f"[NEON DB] Warning clearing image {image_slot} in DB: {db_err}")
+
+    # 5. Invalidate In-Memory Cache
+    global LIVE_PENDING_CACHE, LIVE_PENDING_CACHE_LOCK
+    if LIVE_PENDING_CACHE is not None:
+        with LIVE_PENDING_CACHE_LOCK:
+            for record in LIVE_PENDING_CACHE:
+                if record.get("pole_number") == normalized_pole:
+                    slots = list(record.get("uploaded_slots", []))
+                    if image_slot in slots:
+                        slots.remove(image_slot)
+                    record["uploaded_slots"] = sorted(slots)
+                    break
+
+    return {
+        "status": "success",
+        "message": f"Image {image_slot} deleted for {normalized_pole}.",
+        "pole_number": normalized_pole,
+        "image_slot": image_slot,
+        "google_drive_status": google_drive_status,
+        "google_drive_error": google_drive_error,
+        "google_sheet_status": google_sheet_status,
+        "google_sheet_error": google_sheet_error,
+    }
+
+
 @app.get("/api/v1/poles/{pole_number}/drive-status")
 def get_pole_drive_status(pole_number: str):
     """Return count of uploaded images for the given pole."""
@@ -3897,8 +4144,8 @@ def get_pole_drive_status(pole_number: str):
                     (PoleDB.pole_number == normalized_pole)
                     | (PoleDB.pole_number.ilike(f"%{normalized_pole}%"))
                 ).first()
-                if db_pole and db_pole.uploaded_slots:
-                    image_count = max(image_count, len(db_pole.uploaded_slots))
+                if db_pole and db_pole.uploaded_slots is not None:
+                    image_count = len(db_pole.uploaded_slots)
             finally:
                 session.close()
         except Exception:

@@ -8,6 +8,7 @@ enum UploadStatus { pending, uploading, success, failed }
 
 class ImageUploadState {
   final File file;
+  final int slot;
   final UploadStatus status;
   final double progress;
   final String? error;
@@ -20,6 +21,7 @@ class ImageUploadState {
 
   ImageUploadState({
     required this.file,
+    this.slot = 1,
     this.status = UploadStatus.pending,
     this.progress = 0.0,
     this.error,
@@ -31,6 +33,7 @@ class ImageUploadState {
 
   ImageUploadState copyWith({
     File? file,
+    int? slot,
     UploadStatus? status,
     double? progress,
     String? error,
@@ -41,6 +44,7 @@ class ImageUploadState {
   }) {
     return ImageUploadState(
       file: file ?? this.file,
+      slot: slot ?? this.slot,
       status: status ?? this.status,
       progress: progress ?? this.progress,
       error: error ?? this.error,
@@ -67,7 +71,7 @@ class UploadStateNotifier extends StateNotifier<Map<String, List<ImageUploadStat
 
   UploadStateNotifier(this._uploadService, this._locationService) : super({});
 
-  Future<void> pickAndUploadImage(String poleNumber, ImageSource source) async {
+  Future<void> pickAndUploadSlotImage(String poleNumber, int slot, ImageSource source) async {
     final dynamic pickedFile = await _picker.pickImage(
       source: source,
       maxWidth: 1280,
@@ -79,7 +83,8 @@ class UploadStateNotifier extends StateNotifier<Map<String, List<ImageUploadStat
     final location = await _locationService.getCurrentLocation();
     final file = File(pickedFile.path);
     final newState = ImageUploadState(
-      file: file, 
+      file: file,
+      slot: slot,
       status: UploadStatus.pending,
       latitude: location?.latitude,
       longitude: location?.longitude,
@@ -87,52 +92,97 @@ class UploadStateNotifier extends StateNotifier<Map<String, List<ImageUploadStat
       capturedAt: DateTime.now(),
     );
 
-    // Add to state
+    // Update state for this specific slot
+    final currentList = List<ImageUploadState>.from(state[poleNumber] ?? []);
+    final existingIndex = currentList.indexWhere((s) => s.slot == slot);
+    if (existingIndex >= 0) {
+      currentList[existingIndex] = newState;
+    } else {
+      currentList.add(newState);
+    }
+
     state = {
       ...state,
-      poleNumber: [...(state[poleNumber] ?? []), newState],
+      poleNumber: currentList,
     };
 
-    final int index = state[poleNumber]!.length - 1;
-    await _startUpload(poleNumber, index, file);
+    await _startSlotUpload(poleNumber, slot, file);
+  }
+
+  Future<void> pickAndUploadImage(String poleNumber, ImageSource source) async {
+    // Find first available slot (1, 2, or 3)
+    final existingSlots = (state[poleNumber] ?? []).map((s) => s.slot).toSet();
+    int targetSlot = 1;
+    for (int s = 1; s <= 3; s++) {
+      if (!existingSlots.contains(s)) {
+        targetSlot = s;
+        break;
+      }
+    }
+    await pickAndUploadSlotImage(poleNumber, targetSlot, source);
   }
 
   Future<void> retryUpload(String poleNumber, int index) async {
-    final imageState = state[poleNumber]![index];
+    final list = state[poleNumber] ?? [];
+    if (index < 0 || index >= list.length) return;
+    final imageState = list[index];
     if (imageState.status != UploadStatus.failed) return;
     
-    await _startUpload(poleNumber, index, imageState.file);
+    await _startSlotUpload(poleNumber, imageState.slot, imageState.file);
   }
 
-  Future<void> _startUpload(String poleNumber, int index, File file) async {
-    final oldState = state[poleNumber]![index];
-    _updateImageState(poleNumber, index, oldState.copyWith(status: UploadStatus.uploading, progress: 0.0));
+  Future<void> retrySlotUpload(String poleNumber, int slot) async {
+    final list = state[poleNumber] ?? [];
+    final idx = list.indexWhere((s) => s.slot == slot);
+    if (idx >= 0) {
+      await retryUpload(poleNumber, idx);
+    }
+  }
+
+  Future<void> deleteSlotImage(String poleNumber, int slot) async {
+    // Remove from local in-memory upload state
+    final currentList = List<ImageUploadState>.from(state[poleNumber] ?? []);
+    currentList.removeWhere((s) => s.slot == slot);
+    state = {
+      ...state,
+      poleNumber: currentList,
+    };
+
+    // Call backend deletion
+    await _uploadService.deleteImage(poleNumber: poleNumber, imageSlot: slot);
+  }
+
+  Future<void> _startSlotUpload(String poleNumber, int slot, File file) async {
+    _updateSlotState(poleNumber, slot, UploadStatus.uploading, progress: 0.0);
 
     try {
       await _uploadService.uploadImage(
         poleNumber: poleNumber,
         imageFile: file,
-        imageSlot: index + 1, // Slots are 1, 2, 3
+        imageSlot: slot,
         onProgress: (progress) {
-          _updateImageState(poleNumber, index, oldState.copyWith(
-            status: UploadStatus.uploading,
-            progress: progress,
-          ));
+          _updateSlotState(poleNumber, slot, UploadStatus.uploading, progress: progress);
         },
       );
 
       // Success
-      _updateImageState(poleNumber, index, oldState.copyWith(status: UploadStatus.success, progress: 1.0));
+      _updateSlotState(poleNumber, slot, UploadStatus.success, progress: 1.0);
     } catch (e) {
       // Failed
-      _updateImageState(poleNumber, index, oldState.copyWith(status: UploadStatus.failed, progress: state[poleNumber]![index].progress, error: e.toString()));
+      _updateSlotState(poleNumber, slot, UploadStatus.failed, error: e.toString());
     }
   }
 
-  void _updateImageState(String poleNumber, int index, ImageUploadState newState) {
+  void _updateSlotState(String poleNumber, int slot, UploadStatus status, {double? progress, String? error}) {
     final currentList = List<ImageUploadState>.from(state[poleNumber] ?? []);
-    if (index >= 0 && index < currentList.length) {
-      currentList[index] = newState;
+    final idx = currentList.indexWhere((s) => s.slot == slot);
+    if (idx >= 0) {
+      final old = currentList[idx];
+      currentList[idx] = old.copyWith(
+        status: status,
+        progress: progress ?? old.progress,
+        error: error,
+      );
       state = {
         ...state,
         poleNumber: currentList,

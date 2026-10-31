@@ -20,6 +20,21 @@ final driveStatusProvider = FutureProvider.family<int, String>((ref, poleNumber)
   return ApiService.fetchDriveStatus(poleNumber);
 });
 
+final poleImagesProvider = FutureProvider.family<Map<int, Map<String, dynamic>>, String>((ref, poleNumber) async {
+  final data = await ApiService.fetchPoleImages(poleNumber);
+  final Map<int, Map<String, dynamic>> result = {};
+  if (data != null && data['images'] is Map) {
+    final images = data['images'] as Map;
+    for (int slot = 1; slot <= 3; slot++) {
+      final val = images[slot.toString()];
+      if (val is Map) {
+        result[slot] = Map<String, dynamic>.from(val);
+      }
+    }
+  }
+  return result;
+});
+
 final polesProvider = FutureProvider<List<Pole>>((ref) async {
   final region = ref.watch(selectedRegionProvider);
   final zone = ref.watch(selectedZoneProvider);
