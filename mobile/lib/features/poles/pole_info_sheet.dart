@@ -316,7 +316,7 @@ class PoleInfoSheet extends ConsumerWidget {
                 if (isUploading)
                   Row(
                     children: [
-                      const SizedBox(
+                      SizedBox(
                         width: 12,
                         height: 12,
                         child: CircularProgressIndicator(strokeWidth: 2, color: AppTheme.warning),
@@ -326,7 +326,7 @@ class PoleInfoSheet extends ConsumerWidget {
                         localState?.progress != null && localState!.progress > 0
                             ? 'Uploading ${(localState.progress * 100).toInt()}%'
                             : 'Uploading...',
-                        style: const TextStyle(fontSize: 12, color: AppTheme.warning),
+                        style: TextStyle(fontSize: 12, color: AppTheme.warning),
                       ),
                     ],
                   )
@@ -335,7 +335,7 @@ class PoleInfoSheet extends ConsumerWidget {
                     children: [
                       Icon(Icons.error_outline, color: AppTheme.error, size: 14),
                       const SizedBox(width: 4),
-                      const Text(
+                      Text(
                         'Upload failed',
                         style: TextStyle(fontSize: 12, color: AppTheme.error),
                       ),
@@ -346,7 +346,7 @@ class PoleInfoSheet extends ConsumerWidget {
                     children: [
                       Icon(Icons.check_circle, color: AppTheme.success, size: 14),
                       const SizedBox(width: 4),
-                      const Text(
+                      Text(
                         'Uploaded to Drive & Sheets',
                         style: TextStyle(
                           fontSize: 12,
